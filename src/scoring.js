@@ -58,6 +58,33 @@ export async function calculateScores(db, ad) {
     }
   }
 
+  // === 1.5 Explicitní klientská B2B specifikace (Hard-Overrides) ===
+  const b2bSoukromnikKeywords = [
+    'rk nevolat', 'rk prosím nevolat', 'bez realitky', 'přímý majitel', 'jsem majitel',
+    'bez provize', 'neplatíte provizi', 'realitky nevolat', 'bez rk'
+  ];
+  const b2bRealitkaKeywords = [
+    'rezervační záloha', 'zastupujeme', 'realitní kancelář', 'makléř', 'naše kancelář',
+    'služby rk', 'cena nezahrnuje'
+  ];
+
+  for (const kw of b2bSoukromnikKeywords) {
+    if (text.includes(kw)) {
+      privateScore += 40; // Masivní bonus klientské specifikace
+    }
+  }
+
+  for (const kw of b2bRealitkaKeywords) {
+    if (text.includes(kw)) {
+      realitkaScore += 40; // Masivní postih klientské specifikace
+    }
+  }
+
+  // Opatrnější kontrola slova "provize" (aby nehitlo "bez provize")
+  if (text.includes('provize') && !text.includes('bez provize') && !text.includes('neplatíte provizi')) {
+    realitkaScore += 40;
+  }
+
   // === 2. Email analýza ===
   if (ad.email && ad.email !== 'N/A') {
     const emailLower = ad.email.toLowerCase();

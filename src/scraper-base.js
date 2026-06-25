@@ -241,12 +241,32 @@ export function parseLocation(locationText) {
   const lower = locationText.toLowerCase().trim();
   const result = { region: null, district: null, city: null };
 
-  // Zkus přesnou shodu s mapou
+  // Zkus přesnou shodu s mapou pro názvy (města/kraje)
   for (const [key, data] of Object.entries(REGIONS_MAP)) {
     if (lower.includes(key)) {
       result.region = data.region || result.region;
       result.district = data.district || result.district;
       result.city = data.city || result.city;
+    }
+  }
+
+  // Detekce PSČ (Bazoš často uvádí "110 00", "602 00")
+  const pscMatch = locationText.match(/\b(\d{3})\s*(\d{2})\b/);
+  if (pscMatch) {
+    const pscPrefix = pscMatch[1];
+    // Jednoduché mapování dle prvních dvou číslic PSČ (orientační B2B zlepšení)
+    if (pscPrefix.startsWith('1')) { result.region = 'Praha'; result.district = 'Praha'; }
+    else if (pscPrefix.startsWith('2')) { result.region = 'Středočeský kraj'; }
+    else if (pscPrefix.startsWith('3')) { 
+      result.region = pscPrefix.startsWith('36') || pscPrefix.startsWith('35') ? 'Karlovarský kraj' : (pscPrefix.startsWith('33') || pscPrefix.startsWith('34') ? 'Plzeňský kraj' : 'Jihočeský kraj'); 
+    }
+    else if (pscPrefix.startsWith('4')) { result.region = pscPrefix.startsWith('46') || pscPrefix.startsWith('47') ? 'Liberecký kraj' : 'Ústecký kraj'; }
+    else if (pscPrefix.startsWith('5')) { 
+      result.region = pscPrefix.startsWith('58') || pscPrefix.startsWith('59') ? 'Kraj Vysočina' : (pscPrefix.startsWith('53') ? 'Pardubický kraj' : 'Královéhradecký kraj');
+    }
+    else if (pscPrefix.startsWith('6')) { result.region = 'Jihomoravský kraj'; }
+    else if (pscPrefix.startsWith('7')) { 
+      result.region = pscPrefix.startsWith('73') || pscPrefix.startsWith('74') ? 'Moravskoslezský kraj' : (pscPrefix.startsWith('76') ? 'Zlínský kraj' : 'Olomoucký kraj');
     }
   }
 
