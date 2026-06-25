@@ -158,7 +158,8 @@ export default {
       const stats = await getStats(env.DB);
       const sourceStats = await getStatsBySource(env.DB);
       const regionStats = await getStatsByRegion(env.DB);
-      await updateDashboard(env, stats, sourceStats, regionStats);
+      // sources už máme načtené z řádku 92, případně se dají znovu vytáhnout, použijeme existující `sources` (ale přejmenujeme na sourcesStatus)
+      await updateDashboard(env, stats, sourceStats, regionStats, sources);
     } catch (e) {
       console.error('Dashboard update failed:', e);
     }
@@ -280,7 +281,8 @@ export default {
         const stats = await getStats(env.DB);
         const sourceStats = await getStatsBySource(env.DB);
         const regionStats = await getStatsByRegion(env.DB);
-        await updateDashboard(env, stats, sourceStats, regionStats);
+        const sourcesStatus = await getSourcesStatus(env.DB);
+        await updateDashboard(env, stats, sourceStats, regionStats, sourcesStatus);
 
         return jsonResponse(syncResult);
       }

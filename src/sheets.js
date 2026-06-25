@@ -106,9 +106,9 @@ async function getCachedToken(serviceAccount) {
 }
 
 /**
- * Volání Google Sheets API
+ * Volání Google Sheets API s exponential backoff (Self-Healing anti-rate-limit)
  */
-async function sheetsRequest(token, spreadsheetId, endpoint, method = 'GET', body = null) {
+async function sheetsRequest(token, spreadsheetId, endpoint, method = 'GET', body = null, retries = 3) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}${endpoint}`;
 
   const options = {
@@ -123,14 +123,24 @@ async function sheetsRequest(token, spreadsheetId, endpoint, method = 'GET', bod
     options.body = JSON.stringify(body);
   }
 
-  const response = await fetch(url, options);
+  for (let i = 0; i < retries; i++) {
+    const response = await fetch(url, options);
 
-  if (!response.ok) {
+    if (response.ok) {
+      return await response.json();
+    }
+
+    if (response.status === 429 || response.status >= 500) {
+      const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+      console.warn(`Sheets API rate limit/error (status ${response.status}). Retrying in ${Math.round(delay)}ms...`);
+      await new Promise(res => setTimeout(res, delay));
+      continue;
+    }
+
     const error = await response.text();
     throw new Error(`Sheets API error: ${response.status} ${error}`);
   }
-
-  return await response.json();
+  throw new Error(`Sheets API failed after ${retries} retries`);
 }
 
 // ============================================
@@ -359,9 +369,9 @@ async function ensureSheet(token, spreadsheetId) {
 }
 
 /**
- * Aktualizace Dashboard záložky v Google Sheetu
+ * Aktualizace Dashboard záložky v Google Sheetu (System Command Center)
  */
-export async function updateDashboard(env, stats, sourceStats, regionStats) {
+export async function updateDashboard(env, stats, sourceStats, regionStats, sourcesStatus = []) {
   if (!env.GCP_SERVICE_ACCOUNT || !env.GOOGLE_SHEET_ID) return;
 
   try {
@@ -372,45 +382,67 @@ export async function updateDashboard(env, stats, sourceStats, regionStats) {
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
     const dashboardData = [
-      ['=== PROJECT SPECTRE — DASHBOARD ===', '', '', ''],
-      ['Poslední aktualizace:', now, '', ''],
-      ['', '', '', ''],
-      ['=== CELKOVÉ STATISTIKY ===', '', '', ''],
-      ['Celkem leadů:', stats.total || 0, '', ''],
-      ['Nových (dnes):', stats.today_new || 0, '', ''],
-      ['Nových (týden):', stats.week_new || 0, '', ''],
-      ['Soukromníci:', stats.private_count || 0, '', ''],
-      ['Realitky:', stats.realitka_count || 0, '', ''],
-      ['Neznámé:', stats.unknown_count || 0, '', ''],
-      ['Duplicity:', stats.duplicate_count || 0, '', ''],
-      ['Bez telefonu:', stats.no_phone_count || 0, '', ''],
-      ['', '', '', ''],
-      ['=== STATISTIKY PODLE ZDROJŮ ===', '', '', ''],
-      ['Zdroj', 'Celkem', 'Nové', 'Soukromníci', 'Realitky', 'S telefonem'],
+      ['=== ⚡ PROJECT SPECTRE — SYSTEM COMMAND CENTER ⚡ ===', '', '', '', ''],
+      ['Poslední aktualizace:', now, '', '', ''],
+      ['', '', '', '', ''],
+      ['=== 📊 CELKOVÉ STATISTIKY ===', '', '', '', ''],
+      ['Celkem zpracováno:', stats.total || 0, '', '', ''],
+      ['Nových leadů (dnes):', stats.today_new || 0, '', '', ''],
+      ['Nových leadů (týden):', stats.week_new || 0, '', '', ''],
+      ['Detekováno Soukromníků:', stats.private_count || 0, '', '', ''],
+      ['Odfiltrováno RK:', stats.realitka_count || 0, '', '', ''],
+      ['Duplicity (šetří čas):', stats.duplicate_count || 0, '', '', ''],
+      ['', '', '', '', ''],
+      ['=== 🔴🟢 STATUS ZDROJŮ (HEALTH CHECK) ===', '', '', '', ''],
+      ['Zdroj', 'Stav', 'Poslední běh', 'Nalezeno leadů', 'Poslední chyba'],
     ];
 
-    for (const s of sourceStats) {
+    for (const s of sourcesStatus) {
+      const isOk = s.last_success === 1;
+      const statusText = s.enabled ? (isOk ? '✅ OK' : '❌ CHYBA') : '⏸️ VYPNUTO';
       dashboardData.push([
-        s.source, s.total, s.new_leads, s.private_count, s.realitka_count, s.with_phone
+        s.display_name || s.source_name,
+        statusText,
+        s.last_run || 'Nikdy',
+        s.last_leads_found || 0,
+        s.last_error || '-'
       ]);
     }
 
-    dashboardData.push(['', '', '', '']);
-    dashboardData.push(['=== STATISTIKY PODLE KRAJŮ ===', '', '', '']);
-    dashboardData.push(['Kraj', 'Celkem', 'Soukromníci', '']);
+    dashboardData.push(['', '', '', '', '']);
+    dashboardData.push(['=== 🎯 VÝKONNOST PODLE ZDROJŮ ===', '', '', '', '']);
+    dashboardData.push(['Zdroj', 'Celkem', 'Nové', 'Soukromníci', 'Realitky']);
 
-    for (const r of regionStats) {
-      dashboardData.push([r.region, r.total, r.private_count, '']);
+    for (const s of sourceStats) {
+      dashboardData.push([
+        s.source, s.total, s.new_leads, s.private_count, s.realitka_count
+      ]);
     }
 
+    dashboardData.push(['', '', '', '', '']);
+    dashboardData.push(['=== 🗺️ VÝKONNOST PODLE KRAJŮ ===', '', '', '', '']);
+    dashboardData.push(['Kraj', 'Celkem leadů', 'Z toho Soukromníci', '', '']);
+
+    for (const r of regionStats) {
+      dashboardData.push([r.region, r.total, r.private_count, '', '']);
+    }
+
+    // Čištění celého sheetu před zapsáním nových hodnot
     await sheetsRequest(
       token, spreadsheetId,
-      `/values/${DASHBOARD_SHEET}!A1:F${dashboardData.length}?valueInputOption=USER_ENTERED`,
+      `/values/${DASHBOARD_SHEET}!A1:Z100:clear`,
+      'POST'
+    );
+
+    // Zápis hodnot
+    await sheetsRequest(
+      token, spreadsheetId,
+      `/values/${DASHBOARD_SHEET}!A1:E${dashboardData.length}?valueInputOption=USER_ENTERED`,
       'PUT',
       { values: dashboardData }
     );
 
   } catch (error) {
-    console.error('Dashboard update error:', error);
+    console.error('Dashboard Command Center update error:', error);
   }
 }
