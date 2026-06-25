@@ -1,0 +1,11 @@
+name = "project-spectre"
+main = "src/index.js"
+compatibility_date = "2026-06-25"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "leads-db"
+database_id = "d3e5bc5d-eb09-42de-919b-22aed7677a0e"
+
+[triggers]
+crons = ["0 */3 * * *"]
