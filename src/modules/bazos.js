@@ -1,92 +1,94 @@
-import * as cheerio from 'cheerio';
+// ============================================
+// Project Spectre — Bazoš Reality Scraper
+// Zdroj: https://reality.bazos.cz
+// Metoda: HTML scraping
+// ============================================
 
-async function fetchWithProxy(url) {
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'cs-CZ,cs;q=0.9'
-    }
-  });
+import {
+  fetchWithRetry, parseHtml, delay, createAdObject,
+  extractPhone, extractEmail, parsePrice
+} from '../scraper-base.js';
 
-  if (!response.ok) {
-    throw new Error(Bazos fetch failed: ${ response.status } ${ url });
-  }
-  return await response.text();
-}
+// Kategorie na Bazoš Reality
+const CATEGORIES = [
+  { path: '/prodej/byt/', offer: 'prodej', propType: 'byt' },
+  { path: '/prodej/dum/', offer: 'prodej', propType: 'dum' },
+  { path: '/prodej/pozemek/', offer: 'prodej', propType: 'pozemek' },
+  { path: '/prodej/ostatni/', offer: 'prodej', propType: 'jine' },
+  { path: '/pronajem/byt/', offer: 'pronajem', propType: 'byt' },
+  { path: '/pronajem/dum/', offer: 'pronajem', propType: 'dum' },
+];
 
-function calculateScores(ad) {
-  let realitkaScore = 0;
-  let privateScore = 0;
-  const text = (ad.title + ' ' + ad.description).toLowerCase();
-
-  // Realitka znaky
-  if (text.includes('realitní kancelář')  text.includes('rk ')  text.includes('makléř')
-  text.includes('provize')  text.includes('exkluzivně')  text.includes('naše společnost')) {
-    realitkaScore += 40;
-  }
-  if (ad.phone && ad.phone.length > 9) realitkaScore += 10; // delší čísla často firmy
-
-  // Soukromník znaky
-  if (text.includes('přímý majitel')  text.includes('bez rk')  text.includes('realitky nevolat')
-  text.includes('vlastní')  text.includes('prodám sám')) {
-    privateScore += 50;
-  }
-
-  return { realitkaScore, privateScore };
-}
+const BASE_URL = 'https://reality.bazos.cz';
+const PAGES_PER_CATEGORY = 3; // 3 stránky × ~20 inzerátů = ~60 per kategorie
 
 export async function scrape() {
   const ads = [];
-  const baseUrl = 'https://reality.bazos.cz';
+  const errors = [];
 
-  try {
-    // Základní stránka + 2 další stránky pro lepší pokrytí
-    for (let page = 1; page <= 3; page++) {
-      const url = page === 1 ? `${baseUrl}/` : `${baseUrl}/?p=${page}`;
-      const html = await fetchWithProxy(url);
-      const $ = cheerio.load(html);
+  for (const category of CATEGORIES) {
+    try {
+      for (let page = 0; page < PAGES_PER_CATEGORY; page++) {
+        const offset = page * 20;
+        const url = `${BASE_URL}${category.path}${offset > 0 ? offset + '/' : ''}`;
 
-      $('.inzeraty').each((i, el) => {
-        const titleEl = $(el).find('.inzeratynadpis a');
-        const title = titleEl.text().trim();
-        if (!title) return;
+        let html;
+        try {
+          html = await fetchWithRetry(url);
+        } catch (e) {
+          errors.push(`Bazos ${category.path} page ${page}: ${e.message}`);
+          continue;
+        }
 
-        const url = baseUrl + titleEl.attr('href');
-        const priceText = $(el).find('.inzeratycenad').text().replace(/[^0-9]/g, '');
-        const location = $(el).find('.inzeratyokres').text().trim();
-        const desc = $(el).find('.inzeratypopis').text().trim();
+        const $ = parseHtml(html);
 
-        // Základní extrakce telefonu (často v popisu)
-        const phoneMatch = desc.match(/(\+420)?\s*([0-9]{3}\s*[0-9]{3}\s*[0-9]{3})/);
-        const phone = phoneMatch ? phoneMatch[2].replace(/\s/g, '') : 'N/A';
+        // Bazos používá .inzeraty kontejnery
+        $('.inzeraty, .inzerat').each((i, el) => {
+          try {
+            const titleEl = $(el).find('.inzeratynadpis a, .nadpis a');
+            const title = titleEl.text().trim();
+            if (!title) return;
 
-        const ad = {
-          id: Buffer.from(url).toString('base64').substring(0, 20),
-          source: 'bazos',
-          url,
-          title,
-          description: desc  title,
-          price: parseInt(priceText) || 0,
-          location,
-          phone,
-          raw_data: JSON.stringify({ originalDesc: desc })
-        };
+            const href = titleEl.attr('href') || '';
+            const adUrl = href.startsWith('http') ? href : BASE_URL + href;
 
-        const scores = calculateScores(ad);
-        ad.realitka_score = scores.realitkaScore;
-        ad.private_score = scores.privateScore;
-        ad.advertiser_type = scores.privateScore > scores.realitkaScore ? 'soukromnik' : 'realitka';
+            const priceText = $(el).find('.inzeratycena, .cena').text();
+            const location = $(el).find('.inzeratylokace, .lokace').text().trim()
+              || $(el).find('.inzeratynadpis + div').text().trim();
+            const desc = $(el).find('.inzeratypopis, .popis').text().trim();
 
-        ads.push(ad);
-      });
+            const fullText = title + ' ' + desc;
+            const phone = extractPhone(fullText);
+            const email = extractEmail(fullText);
+
+            const ad = createAdObject({
+              source: 'bazos',
+              url: adUrl,
+              title,
+              description: desc || title,
+              offer_type: category.offer,
+              property_type: category.propType,
+              price: parsePrice(priceText),
+              location,
+              phone,
+              email,
+              raw_data: JSON.stringify({ category: category.path, page }),
+            });
+
+            ads.push(ad);
+          } catch (e) {
+            // Skip jednotlivý inzerát s chybou
+          }
+        });
+
+        // Rate limiting — 1.5s mezi stránkami
+        await delay(1500);
+      }
+    } catch (e) {
+      errors.push(`Bazos category ${category.path}: ${e.message}`);
     }
-
-    console.log(Bazos: nalezeno ${ ads.length } inzerátů);
-    return ads;
-
-  } catch (error) {
-    console.error('Chyba při scrapování Bazos:', error);
-    return [];
   }
+
+  console.log(`Bazos: nalezeno ${ads.length} inzerátů, ${errors.length} chyb`);
+  return { ads, errors, source: 'bazos' };
 }

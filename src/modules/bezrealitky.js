@@ -1,100 +1,124 @@
-import * as cheerio from 'cheerio';
+// ============================================
+// Project Spectre — Bezrealitky Scraper
+// Zdroj: https://www.bezrealitky.cz
+// Metoda: API (SPA — HTML scraping nefunguje)
+// ============================================
 
-async function fetchWithProxy(url) {
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'cs-CZ,cs;q=0.9'
-    }
-  });
+import { fetchJsonWithRetry, delay, createAdObject, extractPhone, extractEmail } from '../scraper-base.js';
 
-  if (!response.ok) {
-    throw new Error(Bezrealitky fetch failed: ${ response.status } ${ url });
-  }
-  return await response.text();
-}
+const BASE_URL = 'https://www.bezrealitky.cz';
 
-function calculateScores(ad) {
-  let realitkaScore = 0;
-  let privateScore = 0;
-  const text = (ad.title + ' ' + ad.description).toLowerCase();
+// Bezrealitky API endpointy (interní GraphQL/REST)
+const API_URL = 'https://api.bezrealitky.cz/graphql';
 
-  // Realitka znaky
-  if (text.includes('realitní')  text.includes('rk ')  text.includes('makléř')
-  text.includes('provize')  text.includes('exkluzivně')  text.includes('nabízíme')) {
-    realitkaScore += 35;
-  }
-  if (ad.phone && ad.phone.length > 9) realitkaScore += 15;
+// Fallback: Public listing API
+const LISTING_API = 'https://www.bezrealitky.cz/api/record/markers';
 
-  // Soukromník znaky
-  if (text.includes('přímý majitel')  text.includes('bez realitky')
-  text.includes('prodám sám')  text.includes('vlastník')  text.includes('nevolat realitky')) {
-    privateScore += 45;
-  }
+const OFFER_TYPES = [
+  { type: 'PRODEJ', offer: 'prodej' },
+  { type: 'PRONAJEM', offer: 'pronajem' },
+];
 
-  return { realitkaScore, privateScore };
-}
+const PROPERTY_TYPES = [
+  { type: 'BYT', propType: 'byt' },
+  { type: 'DUM', propType: 'dum' },
+  { type: 'POZEMEK', propType: 'pozemek' },
+];
 
 export async function scrape() {
   const ads = [];
-  const baseUrl = 'https://www.bezrealitky.cz';
+  const errors = [];
 
-  try {
-    // Hlavní stránka nemovitostí
-    const urls = [
-      `${baseUrl}/prodej/byty/`,
-      `${baseUrl}/prodej/domy/`,
-      `${baseUrl}/pronajem/byty/`
-    ];
+  for (const offerType of OFFER_TYPES) {
+    for (const propertyType of PROPERTY_TYPES) {
+      try {
+        // Zkusíme API endpoint pro výpis
+        const apiUrl = `${LISTING_API}?offerType=${offerType.type}&estateType=${propertyType.type}&page=1&regionOsmIds=R51684`; // R51684 = ČR
 
-    for (const url of urls) {
-      const html = await fetchWithProxy(url);
-      const $ = cheerio.load(html);
+        let data;
+        try {
+          data = await fetchJsonWithRetry(apiUrl);
+        } catch (e) {
+          // Fallback: zkusíme GraphQL
+          try {
+            const graphqlBody = JSON.stringify({
+              operationName: 'ListAdverts',
+              variables: {
+                offerType: offerType.type,
+                estateType: propertyType.type,
+                limit: 50,
+                offset: 0,
+              },
+              query: `query ListAdverts($offerType: String!, $estateType: String!, $limit: Int!, $offset: Int!) {
+                listAdverts(offerType: $offerType, estateType: $estateType, limit: $limit, offset: $offset) {
+                  list { id uri title description price address { city region district } }
+                }
+              }`
+            });
 
-      // Hlavní selektory pro Bezrealitky
-      $('.property').each((i, el) => {
-        const titleEl = $(el).find('h2 a, .property-title a');
-        const title = titleEl.text().trim();
-        if (!title) return;
+            const graphqlResponse = await fetchJsonWithRetry(API_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: graphqlBody,
+            });
 
-        const relativeUrl = titleEl.attr('href');
-        const fullUrl = relativeUrl.startsWith('http') ? relativeUrl : baseUrl + relativeUrl;
+            if (graphqlResponse?.data?.listAdverts?.list) {
+              data = graphqlResponse.data.listAdverts.list;
+            }
+          } catch (gqlError) {
+            errors.push(`Bezrealitky API ${offerType.type}/${propertyType.type}: ${e.message}, GraphQL: ${gqlError.message}`);
+            continue;
+          }
+        }
 
-        const priceText = $(el).find('.price, .property-price').text().replace(/[^0-9]/g, '');
-        const location = $(el).find('.location, .property-location').text().trim();
-        const desc = $(el).find('.description, .property-description').text().trim();
+        if (!data) continue;
 
-        // Telefon - často v detailu, ale zkusíme z popisu
-        const phoneMatch = (desc + title).match(/(\+420)?\s*([0-9]{3}\s*[0-9]{3}\s*[0-9]{3})/);
-        const phone = phoneMatch ? phoneMatch[2].replace(/\s/g, '') : 'N/A';
+        // Zpracuj data (formát závisí na API)
+        const items = Array.isArray(data) ? data : (data.list || data.records || data.results || []);
 
-        const ad = {
-          id: Buffer.from(fullUrl).toString('base64').substring(0, 20),
-          source: 'bezrealitky',
-          url: fullUrl,
-          title,
-          description: desc  title,
-          price: parseInt(priceText) || 0,
-          location,
-          phone,
-          raw_data: JSON.stringify({ originalDesc: desc })
-        };
+        for (const item of items) {
+          try {
+            const adUrl = item.uri
+              ? `${BASE_URL}${item.uri.startsWith('/') ? '' : '/'}${item.uri}`
+              : `${BASE_URL}/nemovitosti-byty-domy/${item.id || item.slug || ''}`;
 
-        const scores = calculateScores(ad);
-        ad.realitka_score = scores.realitkaScore;
-        ad.private_score = scores.privateScore;
-        ad.advertiser_type = scores.privateScore > 30 ? 'soukromnik' : 'realitka';
+            const description = item.description || item.text || item.note || '';
+            const title = item.title || item.name || '';
+            const fullText = title + ' ' + description;
 
-        ads.push(ad);
-      });
+            const ad = createAdObject({
+              source: 'bezrealitky',
+              url: adUrl,
+              title,
+              description: description || title,
+              offer_type: offerType.offer,
+              property_type: propertyType.propType,
+              price: item.price || item.priceCzk || 0,
+              location: item.address?.city || item.location || item.city || '',
+              region: item.address?.region || null,
+              district: item.address?.district || null,
+              city: item.address?.city || item.city || null,
+              phone: extractPhone(fullText),
+              email: extractEmail(fullText),
+              advertiser_name: item.advertiser?.name || item.owner?.name || null,
+              raw_data: JSON.stringify({ id: item.id, offerType: offerType.type, estateType: propertyType.type }),
+            });
+
+            ads.push(ad);
+          } catch (e) {
+            // Skip broken ad
+          }
+        }
+
+        // Rate limiting
+        await delay(2000);
+
+      } catch (e) {
+        errors.push(`Bezrealitky ${offerType.type}/${propertyType.type}: ${e.message}`);
+      }
     }
-
-    console.log(Bezrealitky: nalezeno ${ ads.length } inzerátů);
-    return ads;
-
-  } catch (error) {
-    console.error('Chyba při scrapování Bezrealitky:', error);
-    return [];
   }
+
+  console.log(`Bezrealitky: nalezeno ${ads.length} inzerátů, ${errors.length} chyb`);
+  return { ads, errors, source: 'bezrealitky' };
 }
