@@ -29,7 +29,7 @@ export default {
           }
         }
       } catch (e) {
-        console.error(Chyba v modulu:, e);
+        console.error("Chyba v modulu:", e);
       }
     }
 
