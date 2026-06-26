@@ -1,0 +1,2 @@
+ALTER TABLE scrape_logs ADD COLUMN updated_leads INTEGER DEFAULT 0;
+ALTER TABLE scrape_logs ADD COLUMN duplicates INTEGER DEFAULT 0;

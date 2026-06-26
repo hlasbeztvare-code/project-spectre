@@ -80,104 +80,116 @@ async function processScraperResult(db, result) {
   };
 }
 
+async function runCycle(env) {
+  console.log('=== SPECTRE SCRAPE CYCLE STARTED ===');
+  const cycleStart = Date.now();
+  resetRulesCache();
+
+  // Načti konfiguraci zdrojů a vyber pouze JEDEN nejstarší zdroj
+  // Tím se vyhneme Cloudflare limitu 50 subrequestů na jeden běh
+  const sources = await getSourcesStatus(env.DB);
+  const enabledSources = sources
+    .filter(s => s.enabled && s.scrape_method !== 'manual')
+    .sort((a, b) => {
+      if (!a.last_run) return -1;
+      if (!b.last_run) return 1;
+      return new Date(a.last_run) - new Date(b.last_run);
+    })
+    .slice(0, 1);
+
+  const results = [];
+  const allNewLeads = [];
+
+  for (const sourceConfig of enabledSources) {
+    const scraperFn = SCRAPERS[sourceConfig.source_name];
+    if (!scraperFn) {
+      console.warn(`No scraper found for source: ${sourceConfig.source_name}`);
+      continue;
+    }
+
+    console.log(`--- Scraping: ${sourceConfig.display_name} ---`);
+
+    try {
+      const scrapeResult = await scraperFn();
+      const processResult = await processScraperResult(env.DB, scrapeResult);
+
+      // Log výsledek
+      await saveScrapeLog(env.DB, processResult);
+      await updateSourceStatus(env.DB, sourceConfig.source_name, true, null, processResult.new_leads);
+
+      results.push(processResult);
+
+      // Sbírej nové leady pro Sheets sync
+      if (processResult.new_leads > 0) {
+        const newLeads = await env.DB.prepare(`
+          SELECT * FROM leads
+          WHERE source = ? AND first_seen >= datetime('now', '-1 hour')
+          ORDER BY first_seen DESC
+          LIMIT 100
+        `).bind(sourceConfig.source_name).all();
+
+        if (newLeads.results) {
+          allNewLeads.push(...newLeads.results);
+        }
+      }
+    } catch (e) {
+      console.error(`Scraper ${sourceConfig.source_name} failed:`, e);
+      await updateSourceStatus(env.DB, sourceConfig.source_name, false, e.message);
+      await saveScrapeLog(env.DB, {
+        source: sourceConfig.source_name,
+        processed: 0,
+        new_leads: 0,
+        updated_leads: 0,
+        duplicates: 0,
+        errors: e.message,
+        duration_ms: 0,
+      });
+    }
+  }
+
+  // Post-processing: duplicate counts + phone frequency
+  await postProcessCycle(env.DB);
+
+  // Google Sheets sync
+  if (allNewLeads.length > 0) {
+    try {
+      await syncToSheets(env, allNewLeads);
+    } catch (e) {
+      console.error('Sheets sync failed:', e);
+    }
+  }
+
+  // Dashboard update
+  try {
+    const stats = await getStats(env.DB);
+    const sourceStats = await getStatsBySource(env.DB);
+    const regionStats = await getStatsByRegion(env.DB);
+    const sourcesStatus = await getSourcesStatus(env.DB);
+    await updateDashboard(env, stats, sourceStats, regionStats, sourcesStatus);
+  } catch (e) {
+    console.error('Dashboard update failed:', e);
+  }
+
+  return {
+    status: 'ok',
+    cycleDurationMs: Date.now() - cycleStart,
+    sourcesRun: enabledSources.length,
+    results
+  };
+}
+
 export default {
   /**
    * Cron Trigger — automatický scrape cyklus
    */
   async scheduled(event, env, ctx) {
-    console.log('=== SPECTRE SCRAPE CYCLE STARTED ===');
-    const cycleStart = Date.now();
-    resetRulesCache();
-
-    // Načti konfiguraci zdrojů
-    const sources = await getSourcesStatus(env.DB);
-    const enabledSources = sources.filter(s => s.enabled && s.scrape_method !== 'manual');
-
-    const results = [];
-    const allNewLeads = [];
-
-    for (const sourceConfig of enabledSources) {
-      const scraperFn = SCRAPERS[sourceConfig.source_name];
-      if (!scraperFn) {
-        console.warn(`No scraper found for source: ${sourceConfig.source_name}`);
-        continue;
-      }
-
-      console.log(`--- Scraping: ${sourceConfig.display_name} ---`);
-
-      try {
-        const scrapeResult = await scraperFn();
-        const processResult = await processScraperResult(env.DB, scrapeResult);
-
-        // Log výsledek
-        await saveScrapeLog(env.DB, processResult);
-        await updateSourceStatus(env.DB, sourceConfig.source_name, true, null, processResult.new_leads);
-
-        results.push(processResult);
-
-        // Sbírej nové leady pro Sheets sync
-        if (processResult.new_leads > 0) {
-          const newLeads = await env.DB.prepare(`
-            SELECT * FROM leads
-            WHERE source = ? AND first_seen >= datetime('now', '-1 hour')
-            ORDER BY first_seen DESC
-            LIMIT 100
-          `).bind(sourceConfig.source_name).all();
-
-          if (newLeads.results) {
-            allNewLeads.push(...newLeads.results);
-          }
-        }
-      } catch (e) {
-        console.error(`Scraper ${sourceConfig.source_name} failed:`, e);
-        await updateSourceStatus(env.DB, sourceConfig.source_name, false, e.message);
-        await saveScrapeLog(env.DB, {
-          source: sourceConfig.source_name,
-          processed: 0,
-          new_leads: 0,
-          errors: e.message,
-          duration_ms: 0,
-        });
-      }
-    }
-
-    // Post-processing: duplicate counts + phone frequency
-    await postProcessCycle(env.DB);
-
-    // Google Sheets sync
-    if (allNewLeads.length > 0) {
-      try {
-        await syncToSheets(env, allNewLeads);
-      } catch (e) {
-        console.error('Sheets sync failed:', e);
-      }
-    }
-
-    // Dashboard update
-    try {
-      const stats = await getStats(env.DB);
-      const sourceStats = await getStatsBySource(env.DB);
-      const regionStats = await getStatsByRegion(env.DB);
-      // sources už máme načtené z řádku 92, případně se dají znovu vytáhnout, použijeme existující `sources` (ale přejmenujeme na sourcesStatus)
-      await updateDashboard(env, stats, sourceStats, regionStats, sources);
-    } catch (e) {
-      console.error('Dashboard update failed:', e);
-    }
-
-    const totalDuration = Date.now() - cycleStart;
-    const totalNew = results.reduce((sum, r) => sum + r.new_leads, 0);
-    const totalProcessed = results.reduce((sum, r) => sum + r.processed, 0);
-
-    console.log('=== SPECTRE CYCLE FINISHED ===');
-    console.log(`Processed: ${totalProcessed} | New: ${totalNew} | Duration: ${totalDuration}ms`);
-
-    return { success: true, results, totalNew, totalProcessed, duration: totalDuration };
+    await runCycle(env);
   },
 
   /**
    * HTTP Request Handler — API endpointy
    */
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
 
@@ -206,8 +218,12 @@ export default {
 
       // === GET /run — Manuální spuštění celého cyklu ===
       if (path === '/run' && request.method === 'GET') {
-        const result = await this.scheduled(null, env, null);
-        return jsonResponse(result);
+        try {
+          const result = await runCycle(env);
+          return jsonResponse(result);
+        } catch (e) {
+          return jsonResponse({ error: e.message, stack: e.stack }, 500);
+        }
       }
 
       // === GET /run/:source — Spuštění konkrétního zdroje ===

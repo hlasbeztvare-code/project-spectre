@@ -46,7 +46,7 @@ export async function scrape() {
               variables: {
                 offerType: offerType.type,
                 estateType: propertyType.type,
-                limit: 50,
+                limit: 20,
                 offset: 0,
               },
               query: `query ListAdverts($offerType: String!, $estateType: String!, $limit: Int!, $offset: Int!) {

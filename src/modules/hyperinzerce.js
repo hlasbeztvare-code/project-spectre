@@ -19,7 +19,7 @@ const CATEGORIES = [
   { path: '/pronajem+domu/', offer: 'pronajem', propType: 'dum' },
 ];
 
-const PAGES = 3;
+const PAGES = 1;
 
 export async function scrape() {
   const ads = [];
@@ -36,6 +36,7 @@ export async function scrape() {
         const $ = parseHtml(html);
 
         // Hyperinzerce selektory
+        const listItems = [];
         $('.inzerat, .offer, .ad-row, .listing-item, tr.row, .item').each((i, el) => {
           try {
             const titleEl = $(el).find('a.title, h3 a, h2 a, .nadpis a, td a').first();
@@ -47,28 +48,48 @@ export async function scrape() {
 
             const priceText = $(el).find('.cena, .price, td.cena').text();
             const location = $(el).find('.lokalita, .location, td.lokalita').text().trim();
-            const desc = $(el).find('.popis, .text, .description').first().text().trim();
-            const fullText = title + ' ' + desc;
+            const shortDesc = $(el).find('.popis, .text, .description').first().text().trim();
+
+            listItems.push({ adUrl, title, priceText, location, shortDesc });
+          } catch (e) { /* skip */ }
+        });
+
+        for (const item of listItems) {
+          try {
+            await delay(800);
+            const detailHtml = await fetchWithRetry(item.adUrl);
+            const $detail = parseHtml(detailHtml);
+
+            const phoneText = $detail('a[href^="tel:"], .phone, .telefon, .kontakt, .contact').text();
+            const fullDesc = $detail('.popis, .description, .detail-text, .text, article, p').text().trim() || item.shortDesc;
+
+            let phone = extractPhone(phoneText);
+            if (phone === 'N/A') {
+              phone = extractPhone(fullDesc);
+            }
+            const email = extractEmail(fullDesc);
 
             const ad = createAdObject({
               source: 'hyperinzerce',
-              url: adUrl,
-              title,
-              description: desc || title,
+              url: item.adUrl,
+              title: item.title,
+              description: fullDesc || item.title,
               offer_type: cat.offer,
               property_type: cat.propType,
-              price: parsePrice(priceText),
-              location,
-              phone: extractPhone(fullText),
-              email: extractEmail(fullText),
+              price: parsePrice(item.priceText),
+              location: item.location,
+              phone,
+              email,
               raw_data: JSON.stringify({ category: cat.path, page }),
             });
 
             ads.push(ad);
-          } catch (e) { /* skip */ }
-        });
+          } catch (e) {
+            errors.push(`Hyperinzerce detail error ${item.adUrl}: ${e.message}`);
+          }
+        }
 
-        await delay(2000);
+        await delay(1000);
       } catch (e) {
         errors.push(`Hyperinzerce ${cat.path} page ${page}: ${e.message}`);
       }

@@ -35,6 +35,9 @@ export async function fetchWithRetry(url, options = {}, maxRetries = 3) {
       }
 
       if (!response.ok) {
+        if ([404, 403, 400, 401].includes(response.status)) {
+          throw new Error(`HTTP ${response.status} for ${url} (Fatal, not retrying)`);
+        }
         throw new Error(`HTTP ${response.status} for ${url}`);
       }
 
@@ -100,19 +103,31 @@ export function generateId(url) {
 export function extractPhone(text) {
   if (!text) return 'N/A';
 
-  // Vzory českých telefonních čísel
+  // Odstraníme závorky, které by mohly rozbít párování (např. (777) 666 555)
+  const cleanedText = text.replace(/[\(\)]/g, ' ');
+
+  // Vzory českých telefonních čísel s volitelným mezinárodním prefixem
   const patterns = [
-    /(?:\+420)\s*(\d{3})\s*(\d{3})\s*(\d{3})/,         // +420 XXX XXX XXX
-    /(\d{3})\s+(\d{3})\s+(\d{3})/,                       // XXX XXX XXX
-    /(\d{3})[\s\-]?(\d{3})[\s\-]?(\d{3})/,              // XXX-XXX-XXX or XXXXXXXXX
+    // Formát: XXX XXX XXX (např. 777 666 555)
+    /(?:\+420|00420|420)?[\s\-]*([2-9]\d{2})[\s\-]*(\d{3})[\s\-]*(\d{3})\b/,
+    
+    // Formát: XXX XX XX XX (např. 777 66 55 44)
+    /(?:\+420|00420|420)?[\s\-]*([2-9]\d{2})[\s\-]*(\d{2})[\s\-]*(\d{2})[\s\-]*(\d{2})\b/,
+    
+    // Samostatných 9 číslic
+    /\b([2-9]\d{8})\b/
   ];
 
   for (const pattern of patterns) {
-    const match = text.match(pattern);
+    const match = cleanedText.match(pattern);
     if (match) {
-      const phone = (match[1] + match[2] + match[3]).replace(/\s/g, '');
-      // Ověření délky (9 číslic)
-      if (phone.length === 9 && /^[2-9]/.test(phone)) {
+      const phone = match.slice(1).filter(Boolean).join('');
+      if (phone.length === 9) {
+        // Česká čísla nikdy nezačínají na 42 (420 je mezinárodní předvolba,
+        // pevné linky začínají na 41, 46, 47, 48, 49)
+        if (phone.startsWith('42')) {
+          continue;
+        }
         return phone;
       }
     }

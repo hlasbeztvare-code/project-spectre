@@ -12,11 +12,12 @@ import {
 const BASE_URL = 'https://www.annonce.cz';
 
 const CATEGORIES = [
-  { path: '/reality/prodej/', offer: 'prodej', propType: 'jine' },
-  { path: '/reality/pronajem/', offer: 'pronajem', propType: 'jine' },
+  { path: '/byty-na-prodej.html', offer: 'prodej', propType: 'byt' },
+  { path: '/domy-na-prodej.html', offer: 'prodej', propType: 'dum' },
+  { path: '/pozemky-na-prodej.html', offer: 'prodej', propType: 'pozemek' },
 ];
 
-const PAGES = 3;
+const PAGES = 1;
 
 export async function scrape() {
   const ads = [];
@@ -33,6 +34,7 @@ export async function scrape() {
         const $ = parseHtml(html);
 
         // Annonce selektory
+        const listItems = [];
         $('.inzerat, .oglas, .ad-item, article, .list-item').each((i, el) => {
           try {
             const titleEl = $(el).find('h2 a, h3 a, .title a, a.title').first();
@@ -44,28 +46,48 @@ export async function scrape() {
 
             const priceText = $(el).find('.cena, .price').text();
             const location = $(el).find('.lokalita, .location, .misto, .region').text().trim();
-            const desc = $(el).find('.popis, .text, .description, p').first().text().trim();
-            const fullText = title + ' ' + desc + ' ' + location;
+            const shortDesc = $(el).find('.popis, .text, .description, p').first().text().trim();
+
+            listItems.push({ adUrl, title, priceText, location, shortDesc });
+          } catch (e) { /* skip */ }
+        });
+
+        for (const item of listItems) {
+          try {
+            await delay(800);
+            const detailHtml = await fetchWithRetry(item.adUrl);
+            const $detail = parseHtml(detailHtml);
+
+            const phoneText = $detail('a[href^="tel:"], .phone, .telefon, .kontakt, .contact-phone').text();
+            const fullDesc = $detail('.popis, .description, .detail-text, .text, article, p').text().trim() || item.shortDesc;
+
+            let phone = extractPhone(phoneText);
+            if (phone === 'N/A') {
+              phone = extractPhone(fullDesc);
+            }
+            const email = extractEmail(fullDesc);
 
             const ad = createAdObject({
               source: 'annonce',
-              url: adUrl,
-              title,
-              description: desc || title,
+              url: item.adUrl,
+              title: item.title,
+              description: fullDesc || item.title,
               offer_type: cat.offer,
               property_type: cat.propType,
-              price: parsePrice(priceText),
-              location,
-              phone: extractPhone(fullText),
-              email: extractEmail(fullText),
+              price: parsePrice(item.priceText),
+              location: item.location,
+              phone,
+              email,
               raw_data: JSON.stringify({ category: cat.path, page }),
             });
 
             ads.push(ad);
-          } catch (e) { /* skip */ }
-        });
+          } catch (e) {
+            errors.push(`Annonce detail error ${item.adUrl}: ${e.message}`);
+          }
+        }
 
-        await delay(2000);
+        await delay(1000);
       } catch (e) {
         errors.push(`Annonce ${cat.path} page ${page}: ${e.message}`);
       }

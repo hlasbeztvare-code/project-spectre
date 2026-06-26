@@ -36,6 +36,7 @@ export async function saveLead(db, ad) {
             region = COALESCE(?, region),
             district = COALESCE(?, district),
             city = COALESCE(?, city),
+            phone = CASE WHEN ? != 'N/A' AND ? IS NOT NULL THEN ? ELSE phone END,
             email = COALESCE(?, email),
             advertiser_name = COALESCE(?, advertiser_name),
             duplicate_group = COALESCE(?, duplicate_group)
@@ -44,7 +45,8 @@ export async function saveLead(db, ad) {
         now, now, ad.price, ad.description,
         ad.realitka_score || 0, ad.private_score || 0, ad.advertiser_type || 'neznamo',
         ad.offer_type, ad.property_type, ad.disposition, ad.area_m2,
-        ad.region, ad.district, ad.city, ad.email, ad.advertiser_name,
+        ad.region, ad.district, ad.city,
+        ad.phone, ad.phone, ad.phone, ad.email, ad.advertiser_name,
         dupResult.duplicateGroup,
         dupResult.existingId
       ).run();
@@ -126,9 +128,9 @@ export async function getStats(db) {
       COUNT(CASE WHEN advertiser_type = 'realitka' THEN 1 END) as realitka_count,
       COUNT(CASE WHEN advertiser_type = 'neznamo' THEN 1 END) as unknown_count,
       COUNT(CASE WHEN status = 'duplicitni' THEN 1 END) as duplicate_count,
-      COUNT(CASE WHEN phone = 'N/A' OR phone IS NULL THEN 1 END) as no_phone_count,
-      COUNT(CASE WHEN first_seen >= datetime('now', '-1 day') THEN 1 END) as today_new,
-      COUNT(CASE WHEN first_seen >= datetime('now', '-7 days') THEN 1 END) as week_new
+      COUNT(CASE WHEN phone = 'N/A' OR phone IS NULL OR phone = '' THEN 1 END) as no_phone_count,
+      COUNT(CASE WHEN first_seen >= datetime('now', '-1 day') AND phone != 'N/A' AND phone IS NOT NULL AND phone != '' AND status != 'duplicitni' THEN 1 END) as today_new,
+      COUNT(CASE WHEN first_seen >= datetime('now', '-7 days') AND phone != 'N/A' AND phone IS NOT NULL AND phone != '' AND status != 'duplicitni' THEN 1 END) as week_new
     FROM leads
   `).first();
 

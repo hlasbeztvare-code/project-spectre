@@ -237,13 +237,23 @@ export async function syncToSheets(env, leads) {
     return { synced: 0, error: 'credentials not configured' };
   }
 
+  // Pouze synchronizovat leady, které mají platné telefonní číslo
+  const filteredLeads = leads.filter(lead => lead.phone && lead.phone !== 'N/A' && lead.phone !== '');
+  if (filteredLeads.length === 0) {
+    console.log('Google Sheets sync: Žádné nové leady s telefonním číslem k synchronizaci.');
+    return { synced: 0, new: 0, updated: 0 };
+  }
+
   try {
     const serviceAccount = JSON.parse(env.GCP_SERVICE_ACCOUNT);
     const spreadsheetId = env.GOOGLE_SHEET_ID;
+    console.log(`Starting syncToSheets for ${filteredLeads.length} leads. SpreadsheetId: ${spreadsheetId}`);
     const token = await getCachedToken(serviceAccount);
+    console.log(`Got Google API token successfully`);
 
     // 1. Ověř/vytvoř sheet
     await ensureSheet(token, spreadsheetId);
+    console.log(`ensureSheet passed`);
 
     // 2. Načti existující URL z sheetu (sloupec C = URL)
     let existingUrls = new Map();
@@ -267,7 +277,7 @@ export async function syncToSheets(env, leads) {
     const newRows = [];
     const updates = [];
 
-    for (const lead of leads) {
+    for (const lead of filteredLeads) {
       const row = leadToRow(lead);
       const existingRow = existingUrls.get(lead.url);
 
@@ -280,12 +290,14 @@ export async function syncToSheets(env, leads) {
 
     // 4. Batch append nových řádků
     if (newRows.length > 0) {
-      await sheetsRequest(
+      console.log(`Appending ${newRows.length} new rows to sheets...`);
+      const appendResult = await sheetsRequest(
         token, spreadsheetId,
         `/values/${SHEET_NAME}!A:AB:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
         'POST',
         { values: newRows }
       );
+      console.log(`Append result:`, JSON.stringify(appendResult));
     }
 
     // 5. Batch update existujících
@@ -295,10 +307,10 @@ export async function syncToSheets(env, leads) {
         values: [u.row],
       }));
 
-      // Sheets API omezuje batch na 100 update najednou
+      console.log(`Updating ${updates.length} existing rows in sheets...`);
       for (let i = 0; i < batchData.length; i += 100) {
         const chunk = batchData.slice(i, i + 100);
-        await sheetsRequest(
+        const updateResult = await sheetsRequest(
           token, spreadsheetId,
           '/values:batchUpdate',
           'POST',
@@ -307,15 +319,16 @@ export async function syncToSheets(env, leads) {
             data: chunk,
           }
         );
+        console.log(`Update chunk result:`, JSON.stringify(updateResult));
       }
     }
 
     console.log(`Sheets sync: ${newRows.length} new, ${updates.length} updated`);
     return { synced: newRows.length + updates.length, new: newRows.length, updated: updates.length };
 
-  } catch (error) {
-    console.error('Sheets sync error:', error);
-    return { synced: 0, error: error.message };
+  } catch (e) {
+    console.error('CRITICAL ERROR IN syncToSheets:', e.message, e.stack);
+    return { synced: 0, error: e.message };
   }
 }
 
@@ -382,10 +395,10 @@ export async function updateDashboard(env, stats, sourceStats, regionStats, sour
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
     const dashboardData = [
-      ['=== ⚡ PROJECT SPECTRE — SYSTEM COMMAND CENTER ⚡ ===', '', '', '', ''],
+      ["'=== ⚡ PROJECT SPECTRE — SYSTEM COMMAND CENTER ⚡ ===", '', '', '', ''],
       ['Poslední aktualizace:', now, '', '', ''],
       ['', '', '', '', ''],
-      ['=== 📊 CELKOVÉ STATISTIKY ===', '', '', '', ''],
+      ["'=== 📊 CELKOVÉ STATISTIKY ===", '', '', '', ''],
       ['Celkem zpracováno:', stats.total || 0, '', '', ''],
       ['Nových leadů (dnes):', stats.today_new || 0, '', '', ''],
       ['Nových leadů (týden):', stats.week_new || 0, '', '', ''],
@@ -393,12 +406,12 @@ export async function updateDashboard(env, stats, sourceStats, regionStats, sour
       ['Odfiltrováno RK:', stats.realitka_count || 0, '', '', ''],
       ['Duplicity (šetří čas):', stats.duplicate_count || 0, '', '', ''],
       ['', '', '', '', ''],
-      ['=== 🔴🟢 STATUS ZDROJŮ (HEALTH CHECK) ===', '', '', '', ''],
+      ["'=== 🔴🟢 STATUS ZDROJŮ (HEALTH CHECK) ===", '', '', '', ''],
       ['Zdroj', 'Stav', 'Poslední běh', 'Nalezeno leadů', 'Poslední chyba'],
     ];
 
     for (const s of sourcesStatus) {
-      const isOk = s.last_success === 1;
+      const isOk = !s.last_error;
       const statusText = s.enabled ? (isOk ? '✅ OK' : '❌ CHYBA') : '⏸️ VYPNUTO';
       dashboardData.push([
         s.display_name || s.source_name,
@@ -410,7 +423,7 @@ export async function updateDashboard(env, stats, sourceStats, regionStats, sour
     }
 
     dashboardData.push(['', '', '', '', '']);
-    dashboardData.push(['=== 🎯 VÝKONNOST PODLE ZDROJŮ ===', '', '', '', '']);
+    dashboardData.push(["'=== 🎯 VÝKONNOST PODLE ZDROJŮ ===", '', '', '', '']);
     dashboardData.push(['Zdroj', 'Celkem', 'Nové', 'Soukromníci', 'Realitky']);
 
     for (const s of sourceStats) {
@@ -420,7 +433,7 @@ export async function updateDashboard(env, stats, sourceStats, regionStats, sour
     }
 
     dashboardData.push(['', '', '', '', '']);
-    dashboardData.push(['=== 🗺️ VÝKONNOST PODLE KRAJŮ ===', '', '', '', '']);
+    dashboardData.push(["'=== 🗺️ VÝKONNOST PODLE KRAJŮ ===", '', '', '', '']);
     dashboardData.push(['Kraj', 'Celkem leadů', 'Z toho Soukromníci', '', '']);
 
     for (const r of regionStats) {
