@@ -392,6 +392,9 @@ export async function updateDashboard(env, stats, sourceStats, regionStats, sour
     const spreadsheetId = env.GOOGLE_SHEET_ID;
     const token = await getCachedToken(serviceAccount);
 
+    // Zajistit existenci listů před zápisem
+    await ensureSheet(token, spreadsheetId);
+
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
     const dashboardData = [
