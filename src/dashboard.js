@@ -121,7 +121,7 @@ export function renderDashboard(stats, sourceStats, regionStats, recentLogs, sou
 </head>
 <body>
   <div class="header">
-    <h1>👻 Project Spectre</h1>
+    <h1>Project Spectre</h1>
     <p class="subtitle">Monitoring nemovitostních inzerátů — ${now}</p>
   </div>
 
@@ -161,7 +161,7 @@ export function renderDashboard(stats, sourceStats, regionStats, recentLogs, sou
   </div>
 
   <div class="section">
-    <h2>📊 Statistiky podle zdrojů</h2>
+    <h2>Statistiky podle zdrojů</h2>
     <table>
       <thead>
         <tr><th>Zdroj</th><th>Celkem</th><th>Nové</th><th>Soukromníci</th><th>Realitky</th><th>S telefonem</th></tr>
@@ -182,7 +182,7 @@ export function renderDashboard(stats, sourceStats, regionStats, recentLogs, sou
   </div>
 
   <div class="section">
-    <h2>🗺️ Statistiky podle krajů</h2>
+    <h2>Statistiky podle krajů</h2>
     <table>
       <thead>
         <tr><th>Kraj</th><th>Celkem</th><th>Soukromníci</th></tr>
@@ -200,7 +200,7 @@ export function renderDashboard(stats, sourceStats, regionStats, recentLogs, sou
   </div>
 
   <div class="section">
-    <h2>🔌 Stav zdrojů</h2>
+    <h2>Stav zdrojů</h2>
     <table>
       <thead>
         <tr><th>Zdroj</th><th>Stav</th><th>Metoda</th><th>Priorita</th><th>Poslední úspěch</th><th>Celkem běhů</th><th>Celkem leadů</th><th>Chyba</th></tr>
@@ -223,7 +223,7 @@ export function renderDashboard(stats, sourceStats, regionStats, recentLogs, sou
   </div>
 
   <div class="section">
-    <h2>📋 Poslední běhy</h2>
+    <h2>Poslední běhy</h2>
     <table>
       <thead>
         <tr><th>Čas</th><th>Zdroj</th><th>Zpracováno</th><th>Nové</th><th>Aktualizováno</th><th>Duplicity</th><th>Trvání</th><th>Chyby</th></tr>
@@ -238,7 +238,7 @@ export function renderDashboard(stats, sourceStats, regionStats, recentLogs, sou
             <td>${l.updated_leads || 0}</td>
             <td>${l.duplicates || 0}</td>
             <td>${l.duration_ms}ms</td>
-            <td class="${l.errors ? 'status-error' : ''}">${l.errors ? '⚠️' : '✅'}</td>
+            <td class="${l.errors ? 'status-error' : ''}">${l.errors ? 'CHYBA' : 'OK'}</td>
           </tr>
         `).join('')}
       </tbody>
@@ -246,9 +246,9 @@ export function renderDashboard(stats, sourceStats, regionStats, recentLogs, sou
   </div>
 
   <div class="actions">
-    <a href="/run" class="btn">▶️ Spustit scrape</a>
-    <a href="/stats" class="btn secondary">📊 JSON stats</a>
-    <a href="/stats/sources" class="btn secondary">🔌 Stav zdrojů</a>
+    <a href="/run" class="btn">Spustit scrape</a>
+    <a href="/stats" class="btn secondary">JSON stats</a>
+    <a href="/stats/sources" class="btn secondary">Stav zdrojů</a>
   </div>
 
   <div class="footer">

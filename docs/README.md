@@ -5,7 +5,7 @@
 
 ---
 
-## ⚡ Hlavní funkce (dle B2B specifikace)
+## Hlavní funkce (dle B2B specifikace)
 1. **Pokročilé skórování (AI-like NLP):** Detekce klíčových slov ("RK nevolat", "zastupujeme", "rezervační záloha"), analýza počtu inzerátů na jedno telefonní číslo (detekce skrytých makléřů).
 2. **Self-Healing a Anti-Block:** Vestavěný `Exponential Backoff` pro obcházení rate-limitů (např. Google API) a rotace prodlev u scrapování.
 3. **Plná Deduplikace:** 3-úrovňový dedup engine (URL → Telefon+Lokalita → Jaccard sémantická shoda). Systém propojuje inzeráty přes napříč portály pomocí `duplicate_group` hashe.
@@ -13,7 +13,7 @@
 
 ---
 
-## 🛠️ Architektura a nasazení
+## Architektura a nasazení
 
 | Vrstva | Technologie | Důvod |
 |--------|-------------|-------|
@@ -30,7 +30,7 @@
 
 ---
 
-## 🏗️ Jak přidat nový parser (Nový realitní portál)
+## Jak přidat nový parser (Nový realitní portál)
 Architektura je modulární. Pro přidání zdroje (např. `Sreality`) stačí:
 1. Vytvořit soubor `src/modules/sreality.js`.
 2. Importovat standardní utility ze `src/scraper-base.js` (`fetchWithRetry`, `parseHtml`, `createAdObject`).
@@ -41,7 +41,7 @@ Architektura je modulární. Pro přidání zdroje (např. `Sreality`) stačí:
 
 ---
 
-## 💸 Provozní náklady (Měsíčně)
+## Provozní náklady (Měsíčně)
 - **Cloudflare Workers:** ZDARMA pro prvních 100 000 requestů / den. Nad limit $5/měsíc (předpoklad: pro tento projekt trvale zdarma).
 - **Cloudflare D1:** ZDARMA do 5 GB dat a 5 milionů čtení. (Předpoklad: zdarma minimálně prvních 5 let).
 - **Google API:** ZDARMA (Google Sheets neúčtuje za standardní používání přes Service Account).
@@ -49,7 +49,7 @@ Architektura je modulární. Pro přidání zdroje (např. `Sreality`) stačí:
 
 ---
 
-## ⚠️ Známá rizika a Monitoring
+## Známá rizika a Monitoring
 
 ### Rizika
 1. **Změna HTML struktury zdroje (Bazoš, Avízo atd.):** Pokud portál redesignuje web, scraper přestane najít data a Dashboard zahlásí "Nalezeno 0". *Řešení: Rychlá oprava CSS selektorů v modulu daného zdroje.*
@@ -57,7 +57,7 @@ Architektura je modulární. Pro přidání zdroje (např. `Sreality`) stačí:
 
 ### Jak monitorovat (System Command Center)
 Není potřeba lézt do databáze! Celý monitoring probíhá v první záložce vašeho **Google Sheetu** nebo na webu:
-- **Health Check zdroje (🟢/🔴)**: Ukazuje, zda daný zdroj v posledním běhu nespadl.
+- **Health Check zdroje**: Ukazuje, zda daný zdroj v posledním běhu nespadl.
 - **Detekce chyb**: Pokud API vrátí chybu, Command center vypíše konkrétní text chyby.
 - Alternativně: Webový dashboard běží na `/dashboard` URL vašeho workeru.
 

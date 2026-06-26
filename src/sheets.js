@@ -245,7 +245,12 @@ export async function syncToSheets(env, leads) {
   }
 
   try {
-    const serviceAccount = JSON.parse(env.GCP_SERVICE_ACCOUNT);
+    let serviceAccount;
+    try {
+      serviceAccount = JSON.parse(env.GCP_SERVICE_ACCOUNT);
+    } catch (parseError) {
+      throw new Error(`GCP_SERVICE_ACCOUNT is not a valid JSON. Please check your Cloudflare secret configuration. Details: ${parseError.message}`);
+    }
     const spreadsheetId = env.GOOGLE_SHEET_ID;
     console.log(`Starting syncToSheets for ${filteredLeads.length} leads. SpreadsheetId: ${spreadsheetId}`);
     const token = await getCachedToken(serviceAccount);
@@ -382,13 +387,42 @@ async function ensureSheet(token, spreadsheetId) {
 }
 
 /**
+ * Vizuální mapování zkratek zdrojů na čitelné názvy v Dashboardu
+ */
+function formatSourceName(source) {
+  const map = {
+    'bazos': 'Bazoš Reality',
+    'bezrealitky': 'Bezrealitky',
+    'avizo': 'Avízo Reality',
+    'annonce': 'Annonce Reality',
+    'hyperinzerce': 'Hyperinzerce Reality',
+    'kuprealitu': 'KupRealitu',
+    'realizujte': 'Realizujte',
+    'mujrealitak': 'MůjRealiťák',
+    'sbazar': 'Sbazar (Manual)',
+    'facebook': 'Facebook Groups',
+    'manual': 'Ruční import'
+  };
+  return map[source] || (source ? source.charAt(0).toUpperCase() + source.slice(1) : 'Neznámý');
+}
+
+/**
  * Aktualizace Dashboard záložky v Google Sheetu (System Command Center)
  */
 export async function updateDashboard(env, stats, sourceStats, regionStats, sourcesStatus = []) {
-  if (!env.GCP_SERVICE_ACCOUNT || !env.GOOGLE_SHEET_ID) return;
+  if (!env.GCP_SERVICE_ACCOUNT || !env.GOOGLE_SHEET_ID) {
+    console.warn('Google Sheets Dashboard: Credentials not configured, skipping dashboard update');
+    return;
+  }
 
   try {
-    const serviceAccount = JSON.parse(env.GCP_SERVICE_ACCOUNT);
+    let serviceAccount;
+    try {
+      serviceAccount = JSON.parse(env.GCP_SERVICE_ACCOUNT);
+    } catch (parseError) {
+      throw new Error(`GCP_SERVICE_ACCOUNT is not a valid JSON. Please check your Cloudflare secret configuration. Details: ${parseError.message}`);
+    }
+
     const spreadsheetId = env.GOOGLE_SHEET_ID;
     const token = await getCachedToken(serviceAccount);
 
@@ -398,10 +432,10 @@ export async function updateDashboard(env, stats, sourceStats, regionStats, sour
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
     const dashboardData = [
-      ["'=== ⚡ PROJECT SPECTRE — SYSTEM COMMAND CENTER ⚡ ===", '', '', '', ''],
+      ["'=== PROJECT SPECTRE — SYSTEM COMMAND CENTER ===", '', '', '', ''],
       ['Poslední aktualizace:', now, '', '', ''],
       ['', '', '', '', ''],
-      ["'=== 📊 CELKOVÉ STATISTIKY ===", '', '', '', ''],
+      ["'=== CELKOVÉ STATISTIKY ===", '', '', '', ''],
       ['Celkem zpracováno:', stats.total || 0, '', '', ''],
       ['Nových leadů (dnes):', stats.today_new || 0, '', '', ''],
       ['Nových leadů (týden):', stats.week_new || 0, '', '', ''],
@@ -409,13 +443,13 @@ export async function updateDashboard(env, stats, sourceStats, regionStats, sour
       ['Odfiltrováno RK:', stats.realitka_count || 0, '', '', ''],
       ['Duplicity (šetří čas):', stats.duplicate_count || 0, '', '', ''],
       ['', '', '', '', ''],
-      ["'=== 🔴🟢 STATUS ZDROJŮ (HEALTH CHECK) ===", '', '', '', ''],
+      ["'=== STATUS ZDROJŮ (HEALTH CHECK) ===", '', '', '', ''],
       ['Zdroj', 'Stav', 'Poslední běh', 'Nalezeno leadů', 'Poslední chyba'],
     ];
 
     for (const s of sourcesStatus) {
       const isOk = !s.last_error;
-      const statusText = s.enabled ? (isOk ? '✅ OK' : '❌ CHYBA') : '⏸️ VYPNUTO';
+      const statusText = s.enabled ? (isOk ? 'OK' : 'CHYBA') : 'VYPNUTO';
       dashboardData.push([
         s.display_name || s.source_name,
         statusText,
@@ -426,17 +460,17 @@ export async function updateDashboard(env, stats, sourceStats, regionStats, sour
     }
 
     dashboardData.push(['', '', '', '', '']);
-    dashboardData.push(["'=== 🎯 VÝKONNOST PODLE ZDROJŮ ===", '', '', '', '']);
+    dashboardData.push(["'=== VÝKONNOST PODLE ZDROJŮ ===", '', '', '', '']);
     dashboardData.push(['Zdroj', 'Celkem', 'Nové', 'Soukromníci', 'Realitky']);
 
     for (const s of sourceStats) {
       dashboardData.push([
-        s.source, s.total, s.new_leads, s.private_count, s.realitka_count
+        formatSourceName(s.source), s.total, s.new_leads, s.private_count, s.realitka_count
       ]);
     }
 
     dashboardData.push(['', '', '', '', '']);
-    dashboardData.push(["'=== 🗺️ VÝKONNOST PODLE KRAJŮ ===", '', '', '', '']);
+    dashboardData.push(["'=== VÝKONNOST PODLE KRAJŮ ===", '', '', '', '']);
     dashboardData.push(['Kraj', 'Celkem leadů', 'Z toho Soukromníci', '', '']);
 
     for (const r of regionStats) {
@@ -444,21 +478,29 @@ export async function updateDashboard(env, stats, sourceStats, regionStats, sour
     }
 
     // Čištění celého sheetu před zapsáním nových hodnot
-    await sheetsRequest(
-      token, spreadsheetId,
-      `/values/${DASHBOARD_SHEET}!A1:Z100:clear`,
-      'POST'
-    );
+    try {
+      await sheetsRequest(
+        token, spreadsheetId,
+        `/values/${DASHBOARD_SHEET}!A1:Z100:clear`,
+        'POST'
+      );
+    } catch (clearErr) {
+      console.warn('Dashboard Sheet: clear warning (sheet might be empty or missing):', clearErr.message);
+    }
 
     // Zápis hodnot
-    await sheetsRequest(
-      token, spreadsheetId,
-      `/values/${DASHBOARD_SHEET}!A1:E${dashboardData.length}?valueInputOption=USER_ENTERED`,
-      'PUT',
-      { values: dashboardData }
-    );
+    try {
+      await sheetsRequest(
+        token, spreadsheetId,
+        `/values/${DASHBOARD_SHEET}!A1:E${dashboardData.length}?valueInputOption=USER_ENTERED`,
+        'PUT',
+        { values: dashboardData }
+      );
+    } catch (writeErr) {
+      throw new Error(`Failed to write dashboard values: ${writeErr.message}`);
+    }
 
   } catch (error) {
-    console.error('Dashboard Command Center update error:', error);
+    console.error('CRITICAL ERROR IN updateDashboard:', error.message, error.stack);
   }
 }

@@ -170,9 +170,13 @@ async function runCycle(env) {
     console.error('Dashboard update failed:', e);
   }
 
+  const duration = Date.now() - cycleStart;
+  console.log(`=== SPECTRE SCRAPE CYCLE FINISHED ===`);
+  console.log(`Duration: ${duration}ms, Sources run: ${enabledSources.length}, Synced leads: ${allNewLeads.length}`);
+
   return {
     status: 'ok',
-    cycleDurationMs: Date.now() - cycleStart,
+    cycleDurationMs: duration,
     sourcesRun: enabledSources.length,
     results
   };

@@ -1,4 +1,4 @@
-# 👻 Project Spectre
+# Project Spectre
 
 Project Spectre je automatizovaný **B2B lead generation a scraping systém** pro monitoring realitního trhu v České republice. Běží jako serverless **Cloudflare Worker** s napojením na SQLite databázi **Cloudflare D1** a **Google Sheets API**.
 
@@ -6,7 +6,7 @@ Systém periodicky stahuje nové inzeráty z hlavních českých portálů, prov
 
 ---
 
-## 🚀 Hlavní Funkce
+## Hlavní Funkce
 
 - **Dvoufázový scraping s ochranou**: Scrapery nejdříve přečtou výpisy a následně s bezpečným odstupem (rate limit) navštěvují detaily inzerátů pro spolehlivé vytěžení kontaktů a celých textů.
 - **Robustní Phone Extraction**: Pokročilá extrakce českých telefonních čísel z různých formátů a textových zápisů, ošetřená proti falešnému zachytávání ID inzerátů.
@@ -17,7 +17,7 @@ Systém periodicky stahuje nové inzeráty z hlavních českých portálů, prov
 
 ---
 
-## 📁 Struktura Projektu
+## Struktura Projektu
 
 ```text
 ├── docs/                        # Detailní B2B dokumentace a specifikace
@@ -50,7 +50,7 @@ Systém periodicky stahuje nové inzeráty z hlavních českých portálů, prov
 
 ---
 
-## ⚙️ Konfigurace a Nasazení
+## Konfigurace a Nasazení
 
 ### 1. Požadavky
 - Node.js v18 nebo novější
@@ -104,7 +104,58 @@ npm run deploy
 
 ---
 
-## ➕ Jak Přidat Nový Parser (Scraper)
+## Monitoring a Logování chyb
+
+Systém disponuje třemi vrstvami monitoringu, které zajišťují maximální transparentnost běhu a usnadňují ladění chyb:
+
+### 1. Tabulka `scrape_logs` v D1
+Při každém dokončeném běhu scraperu (ať už ručním nebo automatickém přes cron) se do SQLite databáze uloží podrobný log. Můžete si jej zobrazit pomocí příkazu:
+```bash
+npx wrangler d1 execute leads-db --remote --command="SELECT * FROM scrape_logs ORDER BY run_time DESC LIMIT 10"
+```
+Logy obsahují:
+- `run_time`: Datum a čas spuštění scraperu.
+- `source`: Název scraperu (např. `bazos`, `annonce`).
+- `processed`: Počet celkem nalezených inzerátů.
+- `new_leads`: Počet nově uložených inzerátů s kontaktem.
+- `updated_leads`: Počet aktualizovaných inzerátů.
+- `duplicates`: Počet odhalených duplicit.
+- `errors`: Výpis chybových hlášení při selhání scraperu (např. chyba sítě, změna HTML selektorů).
+- `duration_ms`: Doba běhu cyklu v milisekundách.
+
+### 2. System Command Center v Google Sheets
+Záložka **Dashboard** přímo v Google Tabulce funguje jako živý status panel. Zobrazuje:
+- **Health Check zdrojů**: Tabulku se stavem každého portálu (OK, CHYBA nebo VYPNUTO), časem posledního úspěšného běhu a výpisem poslední známé chyby.
+- **Výkonnost zdrojů**: Celkové počty stažených inzerátů a poměr soukromníků vůči realitkám.
+- **Krajová statistika**: Rozložení leadů v rámci České republiky.
+
+### 3. Wrangler Tail (Živé logování)
+Pro živé sledování konzolových výpisů přímo z produkčního prostředí Cloudflare Workers spusťte:
+```bash
+npx wrangler tail
+```
+Tím uvidíte v reálném čase všechny konzolové logy, síťové dotazy na jednotlivé weby a případné chyby Google Sheets API.
+
+---
+
+## Známá omezení a limity (Known Issues & Limitations)
+
+### 1. Limit subrequestů na Cloudflare Workers (Free Plan)
+Bezplatný Cloudflare plán omezuje počet odchozích síťových dotazů (subrequestů) na **50 na jeden běh Workeru**. Jelikož naše scrapery otevírají detail každého inzerátu zvlášť (20 inzerátů = ~20 HTTP požadavků), spuštění všech scraperů naráz by tento limit okamžitě překročilo.
+- **Řešení**: Systém je nastaven na **Round-Robin spouštění**. Každý běh cronu (každé 4 hodiny) vybere a zpracuje **pouze jeden nejstarší aktivní zdroj**. Během 24 hodin se tak bezpečně vystřídají a aktualizují všechny weby.
+- **Doporučení**: Pro produkční nasazení bez tohoto omezení doporučujeme přejít na placený tarif *Workers Paid* ($5/měsíc), který navyšuje limit subrequestů na 1000 na běh, což umožňuje spouštět všechny scrapery naráz.
+
+### 2. Scraping bez přihlášení (Omezení kontaktů)
+Některé portály (typicky Bezrealitky) neumožňují stažení telefonního čísla z detailu bez přihlášení a zaplacení poplatku.
+- **Dopad**: U těchto portálů se systém spoléhá výhradně na parsování textu inzerátu. Pokud uživatel nenapíše telefon přímo do popisu inzerátu, lead je uložen se statusem `bez_telefonu` a nesynchronizuje se do Google Sheets.
+
+### 3. Zranitelnost vůči změnám HTML (Selektory)
+HTML scrapery (Bazoš, Annonce, Avízo, Hyperinzerce, Realizujte, MůjRealiťák) závisí na CSS selektorech. Pokud majitelé webu změní design stránky, scraper selže (na Dashboardu se u daného zdroje objeví stav CHYBA).
+- **Náprava**: Je nutné upravit příslušné CSS selektory v modulech uvnitř `src/modules/`. Postup opravy je detailně popsán v dokumentu [MAINTENANCE.md](file:///Users/lucky/Project%20Spectre/docs/MAINTENANCE.md).
+
+---
+
+## Jak Přidat Nový Parser (Scraper)
 
 Přidání nového inzertního portálu do systému je navrženo velmi modulárně:
 
@@ -148,7 +199,7 @@ export async function scrape() {
         const phoneText = $detail('.phone-field').text();
         const description = $detail('.description-field').text();
 
-        const ad = createAdObject({
+        const ad = ad = createAdObject({
           source: 'novy_web',
           url: item.url,
           title: item.title,
@@ -192,7 +243,7 @@ VALUES ('novy_web', 'Nový Web Reality', 1, 3, 'https://www.novy-web.cz');
 
 ---
 
-## 🔌 API a Endpointy
+## API a Endpointy
 
 Worker naslouchá na následujících HTTP endpointech:
 
