@@ -36,8 +36,17 @@ Systém periodicky stahuje nové inzeráty z hlavních českých portálů, prov
 │   │   ├── kuprealitu.js        # KupRealitu API Scraper
 │   │   ├── realizujte.js        # Realizujte Scraper
 │   │   ├── mujrealitak.js       # MůjRealiťák Scraper
-│   │   ├── sbazar.js            # Poloautomatický import Sbazar / Facebook
-│   │   └── facebook_apify.js    # Zpracování webhooků z Facebook Groups
+│   │   ├── sreality.js          # Sreality JSON API Scraper
+│   │   ├── ceskereality.js      # ČeskéReality Scraper
+│   │   ├── realitymix.js        # Realitymix Scraper
+│   │   ├── realcity.js          # Realcity Scraper
+│   │   ├── videobydleni.js      # Videobydlení Scraper
+│   │   ├── realingo.js          # Realingo Scraper
+│   │   ├── bydlet.js            # Bydlet.cz Scraper
+│   │   ├── realhit.js           # Realhit Scraper
+│   │   ├── sbazar.js            # Sbazar manuální import
+│   │   └── facebook_apify.js    # Zpracování webhooků
+├── fb-stealth.js                # Lokální stealth satelit pro FB skupiny
 │   ├── index.js                 # Hlavní Worker router a správa cron cyklů
 │   ├── db.js                    # Databázová vrstva (SQLite D1 CRUD)
 │   ├── dedup.js                 # Algoritmy deduplikace a shody textů
@@ -255,4 +264,5 @@ Worker naslouchá na následujících HTTP endpointech:
 - **`GET /leads`** — Vrací filtrovaný seznam leadů (podporuje parametry jako `?source=bazos&status=novy`).
 - **`POST /manual`** — Ruční import inzerátu (přijímá JSON s `url` nebo s plnými daty inzerátu v těle požadavku).
 - **`POST /sheets/sync`** — Vyvolá okamžitou ruční synchronizaci nových leadů s Google Sheets.
-- **`POST /webhook/apify`** — Webhook pro příjem dat ze služby Apify (scraping Facebook skupin).
+- **`POST /api/incoming-lead`** — Datový příjem z lokálních stealth modulů (např. `fb-stealth.js`) s auto-sync funkcí do Google Sheets.
+- **`POST /webhook/apify`** — Webhook pro příjem dat ze služby Apify.

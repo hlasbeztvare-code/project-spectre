@@ -12,9 +12,17 @@
 | 6 | **KupRealitu** | K-API (oficiální) | 2 | Nízké | ✅ Implementováno |
 | 7 | **Realizujte** | HTML scraping | 3 | Střední | ✅ Implementováno |
 | 8 | **MůjRealiťák** | HTML scraping | 3 | Střední | ✅ Implementováno |
-| 9 | **Sbazar** | Poloautomatický | 2 | Vysoké | ⚠️ Pouze manuální |
-| 10 | **Facebook Skupiny** | Webhook (Apify) | 1 | Střední | ✅ Implementováno (Webhook) |
-| 11 | **Ruční import** | POST endpoint | 5 | Žádné | ✅ Implementováno |
+| 9 | **Sreality** | API JSON | 1 (vysoká) | Střední | ✅ Implementováno |
+| 10 | **Ceskereality** | HTML scraping | 2 | Nízké | ✅ Implementováno |
+| 11 | **Realitymix** | HTML scraping | 2 | Nízké | ✅ Implementováno |
+| 12 | **Realcity** | HTML scraping | 2 | Nízké | ✅ Implementováno |
+| 13 | **Videobydleni** | HTML scraping | 2 | Nízké | ✅ Implementováno |
+| 14 | **Realingo** | HTML scraping | 3 | Nízké | ✅ Implementováno |
+| 15 | **Bydlet** | HTML scraping | 3 | Nízké | ✅ Implementováno |
+| 16 | **Realhit** | HTML scraping | 3 | Nízké | ✅ Implementováno |
+| 17 | **Sbazar** | Poloautomatický | 2 | Vysoké | ⚠️ Pouze manuální |
+| 18 | **Facebook Skupiny** | Webhook / Stealth | 1 | Střední | ✅ Implementováno (Stealth/Apify) |
+| 19 | **Ruční import** | POST endpoint | 5 | Žádné | ✅ Implementováno |
 
 ## Detaily zdrojů
 
@@ -40,10 +48,10 @@
 - **Důvod**: Seznam.cz explicitně zakazuje automatizovaný sběr dat ve svých podmínkách. Hrozí blokace IP a právní kroky.
 - **Řešení**: Systém zpracuje ručně vložené URL nebo text ze Sbazaru stejně jako jiné inzeráty.
 
-### Facebook Skupiny (Přes Apify)
-- **Metoda**: Automatizovaná přes webhook (`POST /webhook/apify`)
-- **Důvod**: Facebook neumožňuje scraping. Přímý scraping přes Cloudflare by vedl k okamžitému zablokování.
-- **Řešení**: Je využita služba třetí strany (Apify Actor), která se stará o headless prohlížeč, přihlášení a stahování obsahu ze skupin. Náš systém přijímá vyčištěná data přes Webhook, parsuje text a zařazuje je do databáze jako standardní leady.
+### Facebook Skupiny
+- **Metoda**: Lokální skript `fb-stealth.js` + webhook `POST /api/incoming-lead`
+- **Důvod**: Facebook neumožňuje klasický scraping. 
+- **Řešení**: Systém zahrnuje lokální `fb-stealth.js` běžící nad Puppeteer s maskováním (`puppeteer-extra-plugin-stealth`), který projíždí mobilní UI (`m.facebook.com`), obchází balast nativních React komponent a posílá čisté JSON data do API Workeru. API Worker inzeráty skóruje a přes auto-sync okamžitě nahrává do Google Sheets. Současně systém podporuje i záložní Apify Webhooky.
 
 ## Známá omezení
 

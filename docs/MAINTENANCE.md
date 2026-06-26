@@ -4,6 +4,14 @@
 1. Otevři `/dashboard` — zkontroluj "Poslední běhy"
 2. Zkontroluj Google Sheet — nové záznamy
 
+## Údržba Facebook Stealth Satelitu (`fb-stealth.js`)
+Lokální skript na obcházení ochrany Facebooku vyžaduje aktuální přihlašovací cookies.
+1. Otevři Chrome s pluginem **EditThisCookie**.
+2. Přihlas se do Facebooku a jdi na mobilní verzi `m.facebook.com`.
+3. Klikni na EditThisCookie a vyexportuj cookies ve formátu JSON.
+4. Přepiš obsah souboru `fb-cookies.json` na disku.
+5. Spusť skript: `node fb-stealth.js` (nebo naplánuj přes cron).
+
 ## Přidání nového zdroje
 1. Vytvoř soubor `src/modules/novyzdroj.js`
 2. Implementuj funkci `export async function scrape()` — musí vracet `{ ads: [], errors: [], source: 'novyzdroj' }`

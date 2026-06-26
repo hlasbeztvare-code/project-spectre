@@ -54,15 +54,19 @@ npx wrangler secret put GOOGLE_SHEET_ID
 # Vlož ID a stiskni Enter
 ```
 
-## 5. Apify (Facebook Skupiny) — Nastavení
-Pro automatizované stahování Facebook skupin je potřeba účet na Apify.
-1. Vytvoř si účet na [Apify](https://apify.com)
-2. Najdi a spusť Actor: **Facebook Groups Scraper** (`apify/facebook-groups-scraper`)
-3. V nastavení Actoru zadej požadované URL skupin a (ideálně testovací/dummy) přihlašovací údaje (cookies) k Facebooku.
-4. Nastav **Integration / Webhook** u tohoto Actoru.
-5. Jako Webhook URL zadej: `https://project-spectre.hlancaric.workers.dev/webhook/apify`
-6. Jako Event Type zvol `Run succeeded`.
-7. Kdykoliv se Actor na Apify dokončí, pošle data do našeho systému, který je zpracuje.
+## 5. Facebook Skupiny — Lokální Stealth Satelit & Apify
+Facebook nelze běžně scrapovat z cloudu. Spectre to řeší dvěma způsoby:
+
+**Možnost A: Apify (Cloud)**
+1. Vytvoř Actor `apify/facebook-groups-scraper` na Apify.
+2. Nastav Webhook URL: `https://project-spectre.hlancaric.workers.dev/webhook/apify`
+
+**Možnost B: Lokální Stealth Satelit (Doporučeno pro Zero Error Tolerance)**
+1. Tento projekt obsahuje speciální lokální NodeJS skript `fb-stealth.js`.
+2. Obejdi bot-ochranu přes balíčky `puppeteer-extra` a `puppeteer-extra-plugin-stealth` (nainstaluj je lokálně).
+3. Vyexportuj své Facebook cookies do JSON (přes plugin *EditThisCookie*) a ulož je do `fb-cookies.json`.
+4. Spusť satelit lokálně: `node fb-stealth.js`
+5. Data se obratem bezpečně odesílají do `POST /api/incoming-lead` a propisují rovnou do Google Tabulky.
 
 ## 6. Deploy
 ```bash
