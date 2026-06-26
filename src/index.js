@@ -337,6 +337,28 @@ export default {
         await updateSourceStatus(env.DB, ad.source, true, null, processResult.new_leads);
         await postProcessCycle(env.DB);
         
+        // Okamžitá synchronizace do Google Sheets pro nové FB leady
+        if (processResult.new_leads > 0) {
+          try {
+            const newLeads = await env.DB.prepare(`
+              SELECT * FROM leads WHERE source = ? AND status = 'pripraveno' ORDER BY first_seen DESC LIMIT 10
+            `).bind(ad.source).all();
+            
+            if (newLeads.results && newLeads.results.length > 0) {
+              await syncToSheets(env, newLeads.results);
+              
+              // Aktualizace statistik na Dashboardu
+              const stats = await getStats(env.DB);
+              const sourceStats = await getStatsBySource(env.DB);
+              const regionStats = await getStatsByRegion(env.DB);
+              const sourcesStatus = await getSourcesStatus(env.DB);
+              await updateDashboard(env, stats, sourceStats, regionStats, sourcesStatus);
+            }
+          } catch (err) {
+            console.error('FB Sync to sheets failed:', err);
+          }
+        }
+        
         return jsonResponse(processResult);
       }
 
