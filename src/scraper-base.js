@@ -99,38 +99,59 @@ export function generateId(url) {
 
 /**
  * Extrakce telefonního čísla z textu
+ * Agresivní, neprůstřelná verze s podporou českých textových číslic,
+ * odstraňováním šumu mezi číslicemi a robustním fallbackem.
  */
 export function extractPhone(text) {
   if (!text) return 'N/A';
 
-  // Odstraníme závorky, které by mohly rozbít párování (např. (777) 666 555)
-  const cleanedText = text.replace(/[\(\)]/g, ' ');
+  // --- Krok 1: Převod českých textových číslic na číslice ---
+  // Podporuje varianty s i bez diakritiky (pro případ OCR nebo neformálního zápisu)
+  const WORD_TO_DIGIT = {
+    'nula': '0', 'jedna': '1', 'jedná': '1', 'dva': '2', 'dvě': '2',
+    'tri': '3', 'tři': '3', 'čtyři': '4', 'ctyri': '4',
+    'pět': '5', 'pet': '5', 'šest': '6', 'sest': '6',
+    'sedm': '7', 'osm': '8', 'devět': '9', 'devet': '9',
+  };
+  let normalized = text.toLowerCase();
+  for (const [word, digit] of Object.entries(WORD_TO_DIGIT)) {
+    // Nahradíme celá slova (word boundary), opakovaně pro více výskytů
+    normalized = normalized.replace(new RegExp(`\\b${word}\\b`, 'g'), digit);
+  }
 
-  // Vzory českých telefonních čísel s volitelným mezinárodním prefixem
-  const patterns = [
-    // Formát: XXX XXX XXX (např. 777 666 555)
-    /(?:\+420|00420|420)?[\s\-]*([2-9]\d{2})[\s\-]*(\d{3})[\s\-]*(\d{3})\b/,
-    
-    // Formát: XXX XX XX XX (např. 777 66 55 44)
-    /(?:\+420|00420|420)?[\s\-]*([2-9]\d{2})[\s\-]*(\d{2})[\s\-]*(\d{2})[\s\-]*(\d{2})\b/,
-    
-    // Samostatných 9 číslic
-    /\b([2-9]\d{8})\b/
-  ];
+  // --- Krok 2: Odstraníme šum (+, -, /, tečky, závorky, mezery) POUZE mezi číslicemi ---
+  // Využíváme lookbehind (?<=\d) a lookahead (?=\d) pro přesné cílení
+  const denoised = normalized
+    .replace(/[\(\)]/g, ' ')
+    .replace(/(?<=\d)[\s+\-\/\.\(\)]+(?=\d)/g, '');
 
-  for (const pattern of patterns) {
-    const match = cleanedText.match(pattern);
-    if (match) {
-      const phone = match.slice(1).filter(Boolean).join('');
-      if (phone.length === 9) {
-        // Česká čísla nikdy nezačínají na 42 (420 je mezinárodní předvolba,
-        // pevné linky začínají na 41, 46, 47, 48, 49)
-        if (phone.startsWith('42')) {
-          continue;
-        }
-        return phone;
-      }
+  // --- Krok 3: Primární extrakce pomocí regex s uzávorkovanou skupinou ---
+  // Odřízne mezinárodní předvolby (+420, 420, 00420, +421, 00421 atd.)
+  // a zachytí devítimístné tělo začínající na 2–9
+  const primaryPattern = /(?:\+?(?:420|421)|00(?:420|421))?([2-9]\d{8})\b/;
+  const primaryMatch = denoised.match(primaryPattern);
+  if (primaryMatch) {
+    const phone = primaryMatch[1];
+    // Sanity check: neprojdou čísla začínající na 42x (mezinárodní prefix uvnitř)
+    if (!phone.startsWith('42')) {
+      return phone;
     }
+  }
+
+  // --- Krok 4: Robustní nouzový fallback ---
+  // Odstraní vše nečíselné a zkontroluje délku výsledného řetězce
+  const digitsOnly = denoised.replace(/\D/g, '');
+
+  if (digitsOnly.length === 9 && /^[2-9]/.test(digitsOnly)) {
+    return digitsOnly;
+  }
+  // 12 číslic → předvolba +420 (3) + číslo (9)
+  if (digitsOnly.length === 12 && /^420[2-9]/.test(digitsOnly)) {
+    return digitsOnly.slice(3);
+  }
+  // 14 číslic → 00420 (5) + číslo (9)
+  if (digitsOnly.length === 14 && /^00420[2-9]/.test(digitsOnly)) {
+    return digitsOnly.slice(5);
   }
 
   return 'N/A';

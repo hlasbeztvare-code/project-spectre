@@ -11,6 +11,14 @@ import { scrape as scrapeHyperinzerce } from './modules/hyperinzerce.js';
 import { scrape as scrapeKuprealitu } from './modules/kuprealitu.js';
 import { scrape as scrapeRealizujte } from './modules/realizujte.js';
 import { scrape as scrapeMujrealitak } from './modules/mujrealitak.js';
+import { scrape as scrapeSreality } from './modules/sreality.js';
+import { scrape as scrapeCeskereality } from './modules/ceskereality.js';
+import { scrape as scrapeRealitymix } from './modules/realitymix.js';
+import { scrape as scrapeRealcity } from './modules/realcity.js';
+import { scrape as scrapeVideobydleni } from './modules/videobydleni.js';
+import { scrape as scrapeRealingo } from './modules/realingo.js';
+import { scrape as scrapeBydlet } from './modules/bydlet.js';
+import { scrape as scrapeRealhit } from './modules/realhit.js';
 import { scrape as scrapeSbazar } from './modules/sbazar.js';
 import { processUrl, processText } from './modules/sbazar.js';
 import { processApifyPost } from './modules/facebook_apify.js';
@@ -33,6 +41,14 @@ const SCRAPERS = {
   kuprealitu: scrapeKuprealitu,
   realizujte: scrapeRealizujte,
   mujrealitak: scrapeMujrealitak,
+  sreality: scrapeSreality,
+  ceskereality: scrapeCeskereality,
+  realitymix: scrapeRealitymix,
+  realcity: scrapeRealcity,
+  videobydleni: scrapeVideobydleni,
+  realingo: scrapeRealingo,
+  bydlet: scrapeBydlet,
+  realhit: scrapeRealhit,
   sbazar: scrapeSbazar,
 };
 
@@ -52,12 +68,7 @@ async function processScraperResult(db, result) {
       ad.private_score = scores.privateScore;
       ad.advertiser_type = scores.advertiserType;
 
-      // Automaticky označit bez telefonu
-      if (!ad.phone || ad.phone === 'N/A') {
-        ad.status = 'bez_telefonu';
-      }
-
-      // Uložit
+      // Uložit (saveLead dynamicky určí výchozí status dle telefonu a typu inzerenta)
       const saveResult = await saveLead(db, ad);
       if (saveResult.action === 'new') newCount++;
       else if (saveResult.action === 'updated') updatedCount++;
@@ -119,11 +130,11 @@ async function runCycle(env) {
 
       results.push(processResult);
 
-      // Sbírej nové leady pro Sheets sync
+      // Sbírej nové leady pro Sheets sync — pouze provolatelné (status = 'pripraveno')
       if (processResult.new_leads > 0) {
         const newLeads = await env.DB.prepare(`
           SELECT * FROM leads
-          WHERE source = ? AND first_seen >= datetime('now', '-1 hour')
+          WHERE source = ? AND status = 'pripraveno'
           ORDER BY first_seen DESC
           LIMIT 100
         `).bind(sourceConfig.source_name).all();
@@ -307,9 +318,32 @@ export default {
         return jsonResponse(syncResult);
       }
 
-      // === POST /webhook/apify — Příjem dat z Apify (Facebook skupiny) ===
+      // === POST /api/incoming-lead — Příjem dat z lokálních stealth modulů (FB) ===
+      if (path === '/api/incoming-lead' && request.method === 'POST') {
+        const body = await request.json();
+        
+        // Zabalení jednoho leadu do struktury pro processScraperResult
+        const ad = {
+          source: body.source || 'facebook',
+          url: body.url || '',
+          title: body.title || 'Neznámý příspěvek',
+          description: body.description || '',
+          advertiser_name: body.advertiser_name || '',
+          raw_data: body.raw_data || '{}'
+        };
+        
+        const processResult = await processScraperResult(env.DB, { ads: [ad], errors: [], source: ad.source });
+        await saveScrapeLog(env.DB, processResult);
+        await updateSourceStatus(env.DB, ad.source, true, null, processResult.new_leads);
+        await postProcessCycle(env.DB);
+        
+        return jsonResponse(processResult);
+      }
+
+      // === POST /webhook/apify — Příjem dat z Apify ===
       if (path === '/webhook/apify' && request.method === 'POST') {
         const body = await request.json();
+        
         // Apify dataset typicky posílá array nebo objekt s items
         const items = Array.isArray(body) ? body : (body.items || [body]);
         

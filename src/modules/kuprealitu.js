@@ -1,89 +1,217 @@
 // ============================================
 // Project Spectre — KupRealitu Scraper
 // Zdroj: https://www.kuprealitu.cz
-// Metoda: K-API (oficiální API)
+// Metoda: Sitemap Scraping (přepracováno 2026-06)
+//
+// DŮVOD PŘEPRACOVÁNÍ:
+//   Staré /api/v1/* endpointy a /prodej/* listing stránky
+//   vracejí HTTP 404 — portál žádné veřejné listing pages ani
+//   JSON API nemá. Jedinou spolehlivou vstupní branou je
+//   sitemap.xml (~6000+ URL, denní aktualizace).
+//
+// STRATEGIE:
+//   1. Fetch sitemap.xml → parsuj <loc> URL regexem
+//   2. Filtruj jen /detail/ URL s relevantními klíčovými slovy
+//   3. Detekuj typ nabídky a nemovitosti ze slugu
+//   4. Scrapuj max. MAX_PER_RUN detail stránek
+//   5. Vytaž telefon přes 3-úrovňový fallback s extractPhone()
 // ============================================
 
-import { fetchJsonWithRetry, delay, createAdObject, extractPhone, extractEmail } from '../scraper-base.js';
+import {
+  fetchWithRetry, parseHtml, delay, createAdObject,
+  extractPhone, extractEmail, parsePrice
+} from '../scraper-base.js';
 
 const BASE_URL = 'https://www.kuprealitu.cz';
-// K-API dokumentace: https://www.kuprealitu.cz/k-api
-const API_BASE = 'https://www.kuprealitu.cz/api/v1';
+const SITEMAP_URL = `${BASE_URL}/sitemap.xml`;
 
-const OFFER_TYPES = [
-  { param: 'prodej', offer: 'prodej' },
-  { param: 'pronajem', offer: 'pronajem' },
+// Max. počet detail stránek ke scrapování na jeden běh.
+// 30 × ~600ms delay = ~18 vteřin (bezpečně pod limitem)
+const MAX_PER_RUN = 30;
+
+// Klíčová slova pro detekci offer_type ze URL slugu
+const PRODEJ_KEYWORDS   = ['prodej'];
+const PRONAJEM_KEYWORDS = ['pronajem'];
+
+// Klíčová slova pro detekci property_type ze URL slugu
+// Řazeno od nejspecifičtějšího k nejobecnějšímu
+const PROPERTY_MAP = [
+  { type: 'pozemek', keywords: ['stavebniho-pozemku', 'pozemku', 'zahrady', 'louky', 'lesa', 'pole', 'parcely'] },
+  { type: 'dum',     keywords: ['rodinneho-domu', 'rodinny-dum', 'domu', 'vily', 'bungalovu', 'usedlosti', 'chalupy', 'chaty'] },
+  { type: 'byt',     keywords: ['bytu', 'byty'] },
+  { type: 'komerce', keywords: ['kancelare', 'skladu', 'obchodnich-prostor', 'komercni', 'restauracniho'] },
 ];
 
-const PROPERTY_TYPES = [
-  { param: 'byty', propType: 'byt' },
-  { param: 'domy', propType: 'dum' },
-  { param: 'pozemky', propType: 'pozemek' },
-];
+/**
+ * Detekuje offer_type ('prodej' | 'pronajem') ze slug URL
+ */
+function detectOfferType(slug) {
+  if (PRONAJEM_KEYWORDS.some(k => slug.includes(k))) return 'pronajem';
+  if (PRODEJ_KEYWORDS.some(k => slug.includes(k))) return 'prodej';
+  return 'prodej'; // výchozí
+}
+
+/**
+ * Detekuje property_type ze slug URL
+ */
+function detectPropertyType(slug) {
+  for (const { type, keywords } of PROPERTY_MAP) {
+    if (keywords.some(k => slug.includes(k))) return type;
+  }
+  return 'jine';
+}
+
+/**
+ * Parsuje sitemap.xml a vrací pole URL detail stránek
+ * Regex přístup — cloudflare Workers nepodporuje DOMParser
+ */
+function parseSitemapUrls(xml) {
+  const urls = [];
+  // Extrahujeme obsah <loc>...</loc> tagů
+  const locRegex = /<loc>(https:\/\/www\.kuprealitu\.cz\/detail\/[^<]+)<\/loc>/g;
+  let match;
+  while ((match = locRegex.exec(xml)) !== null) {
+    urls.push(match[1].trim());
+  }
+  return urls;
+}
+
+/**
+ * Scrapuje jeden detail inzerátu z HTML stránky
+ */
+function scrapeDetail($, url) {
+  // Titul: h1 ve .property-title (bez tlačítka Zpět)
+  const titleRaw = $('h1[itemprop="name"]').first().text()
+    .replace(/\s+/g, ' ').trim();
+
+  // Alternativa z meta title (spolehlivější, bez HTML artefaktů)
+  const metaTitle = $('meta[name="title"]').attr('content') || '';
+  const title = titleRaw || metaTitle.replace(' | KUPREALITU.CZ', '').replace(' | www.kuprealitu.cz', '').trim();
+
+  // Cena: span.tag.price
+  const priceText = $('span.tag.price').first().text().trim();
+
+  // Adresa: schema.org mikrodata (nejspolehlivější)
+  const street   = $('span[itemprop="streetAddress"]').first().text().trim();
+  const locality = $('span[itemprop="addressLocality"]').first().text().trim();
+  const region   = $('span[itemprop="addressRegion"]').first().text().trim();
+  // Fallback: figure tag ve .property-title
+  const figureText = $('header.property-title figure').first().text().trim();
+  const location = [street, locality].filter(Boolean).join(', ') || figureText;
+
+  // Dispozice: dt "Dispozice" → dd
+  let disposition = null;
+  $('dl dt').each((i, el) => {
+    if ($(el).text().toLowerCase().includes('dispozice')) {
+      disposition = $(el).next('dd').text().trim() || null;
+    }
+  });
+
+  // Plocha: dt "Plocha" → dd
+  let areaTxt = null;
+  $('dl dt').each((i, el) => {
+    if ($(el).text().toLowerCase().includes('plocha')) {
+      areaTxt = $(el).next('dd').text().replace(/[^0-9]/g, '') || null;
+    }
+  });
+  const area_m2 = areaTxt ? parseInt(areaTxt) || null : null;
+
+  // Popis: primárně meta description (nejkompaktnější a nejspolehlivější)
+  const metaDesc = $('meta[name="description"]').attr('content') || '';
+  // Fallback: hlavní text sekce
+  const bodyDesc = $('#property-detail .property-description, #property-detail section.description, #property-detail .text')
+    .first().text().trim();
+  const description = metaDesc || bodyDesc || title;
+
+  // Telefon: 3-úrovňový fallback s extractPhone()
+  // 1. Přímý tel: href atribut
+  const telHref = $('a[href^="tel:"]').first().attr('href') || '';
+  const telFromHref = telHref.replace(/^tel:[+]?/, '').replace(/\s/g, '');
+
+  // 2. Text kontaktních elementů
+  const phoneText = $('a[href^="tel:"], .contact, .kontakt, .phone, .telefon').text();
+
+  // 3. Celý popis (telefon může být zapsán slovně nebo v textu)
+  let phone = extractPhone(telFromHref);
+  if (phone === 'N/A') phone = extractPhone(phoneText);
+  if (phone === 'N/A') phone = extractPhone(description);
+
+  // Email
+  const email = extractEmail(phoneText) || extractEmail(description);
+
+  return { title, priceText, location, region, disposition, area_m2, description, phone, email };
+}
 
 export async function scrape() {
   const ads = [];
   const errors = [];
 
-  for (const offerType of OFFER_TYPES) {
-    for (const propertyType of PROPERTY_TYPES) {
-      try {
-        // Zkusíme K-API
-        const apiUrl = `${API_BASE}/estates?offer_type=${offerType.param}&estate_type=${propertyType.param}&limit=50&page=1`;
+  // ── Krok 1: Stáhni sitemap ──────────────────────────────────────
+  let allDetailUrls = [];
+  try {
+    const sitemapXml = await fetchWithRetry(SITEMAP_URL);
+    allDetailUrls = parseSitemapUrls(sitemapXml);
+    console.log(`KupRealitu: sitemap obsahuje ${allDetailUrls.length} detail URL`);
+  } catch (e) {
+    errors.push(`KupRealitu sitemap fetch failed: ${e.message}`);
+    return { ads, errors, source: 'kuprealitu' };
+  }
 
-        let data;
-        try {
-          data = await fetchJsonWithRetry(apiUrl);
-        } catch (apiError) {
-          // Fallback: zkusíme public listing endpoint
-          try {
-            const fallbackUrl = `${BASE_URL}/${offerType.param}/${propertyType.param}/?format=json`;
-            data = await fetchJsonWithRetry(fallbackUrl);
-          } catch (fallbackError) {
-            errors.push(`KupRealitu API ${offerType.param}/${propertyType.param}: ${apiError.message}`);
-            continue;
-          }
-        }
+  if (allDetailUrls.length === 0) {
+    errors.push('KupRealitu: sitemap neobsahuje žádné detail URL (parsování selhalo?)');
+    return { ads, errors, source: 'kuprealitu' };
+  }
 
-        if (!data) continue;
+  // ── Krok 2: Filtruj relevantní nemovitosti ze slugu ─────────────
+  // Bereme jen byty, domy, pozemky (ne garáže, sklady, restaurace atp.)
+  const RELEVANT_TYPES = new Set(['byt', 'dum', 'pozemek']);
+  const filtered = allDetailUrls.filter(url => {
+    const slug = url.split('/detail/')[1] || '';
+    return RELEVANT_TYPES.has(detectPropertyType(slug));
+  });
 
-        const items = Array.isArray(data) ? data : (data.results || data.estates || data.items || []);
+  // Bereme POSLEDNÍCH MAX_PER_RUN URL (= nejnovější inzeráty v sitemapě)
+  const toScrape = filtered.slice(-MAX_PER_RUN);
+  console.log(`KupRealitu: scrapuji ${toScrape.length} detail URL (filtrováno z ${filtered.length})`);
 
-        for (const item of items) {
-          try {
-            const adUrl = item.url || item.link || `${BASE_URL}/detail/${item.id || item.slug || ''}`;
-            const description = item.description || item.text || '';
-            const title = item.title || item.name || '';
-            const fullText = title + ' ' + description;
+  // ── Krok 3: Scrapuj detail stránky ──────────────────────────────
+  for (const adUrl of toScrape) {
+    try {
+      await delay(600);
 
-            const ad = createAdObject({
-              source: 'kuprealitu',
-              url: adUrl,
-              title,
-              description: description || title,
-              offer_type: offerType.offer,
-              property_type: propertyType.propType,
-              price: item.price || item.cena || 0,
-              location: item.location || item.address || item.city || '',
-              region: item.region || null,
-              district: item.district || null,
-              city: item.city || null,
-              area_m2: item.area || item.plocha || null,
-              disposition: item.disposition || item.dispozice || null,
-              phone: item.phone || extractPhone(fullText),
-              email: item.email || extractEmail(fullText),
-              advertiser_name: item.advertiser || item.seller || null,
-              raw_data: JSON.stringify({ id: item.id }),
-            });
+      const slug = adUrl.split('/detail/')[1] || '';
+      const offerType    = detectOfferType(slug);
+      const propertyType = detectPropertyType(slug);
 
-            ads.push(ad);
-          } catch (e) { /* skip */ }
-        }
+      const html = await fetchWithRetry(adUrl);
+      const $    = parseHtml(html);
 
-        await delay(2000);
-      } catch (e) {
-        errors.push(`KupRealitu ${offerType.param}/${propertyType.param}: ${e.message}`);
-      }
+      const { title, priceText, location, region, disposition, area_m2, description, phone, email } = scrapeDetail($, adUrl);
+
+      if (!title || title.length < 3) continue;
+
+      const ad = createAdObject({
+        source:        'kuprealitu',
+        url:           adUrl,
+        title,
+        description:   description || title,
+        offer_type:    offerType,
+        property_type: propertyType,
+        price:         parsePrice(priceText),
+        location,
+        region:        region || null,
+        disposition:   disposition || null,
+        area_m2,
+        phone,
+        email,
+        raw_data:      JSON.stringify({ slug }),
+      });
+
+      ads.push(ad);
+    } catch (e) {
+      // 404/403 na detail → inzerát smazán, přeskočíme bez šumu
+      if (e.message && e.message.includes('404')) continue;
+      errors.push(`KupRealitu detail ${adUrl}: ${e.message}`);
     }
   }
 

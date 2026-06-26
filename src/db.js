@@ -80,7 +80,22 @@ export async function saveLead(db, ad) {
       return { action: 'duplicate', id: ad.id, group: dupResult.duplicateGroup };
 
     } else {
-      // Nový záznam
+      // Nový záznam — dynamické určení výchozího statusu
+      let initialStatus;
+      const hasPhone = ad.phone && ad.phone !== 'N/A' && ad.phone !== '';
+
+      if (!hasPhone) {
+        // Chybí provolatelný kontakt
+        initialStatus = 'bez_telefonu';
+      } else if (ad.advertiser_type === 'soukromnik') {
+        // Soukromník s telefonem → okamžitě do fronty operátorů
+        initialStatus = 'pripraveno';
+      } else if (ad.advertiser_type === 'realitka') {
+        initialStatus = 'realitka';
+      } else {
+        initialStatus = 'novy';
+      }
+
       const result = await db.prepare(`
         INSERT INTO leads (
           id, source, url, title, description, offer_type, property_type,
@@ -89,7 +104,7 @@ export async function saveLead(db, ad) {
           realitka_score, private_score, duplicate_group,
           ad_published_date, ad_status,
           first_seen, last_seen, last_check, status, raw_data
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'novy', ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
         ad.id, ad.source, ad.url, ad.title, ad.description,
         ad.offer_type || 'prodej', ad.property_type || 'jine',
@@ -100,7 +115,7 @@ export async function saveLead(db, ad) {
         ad.realitka_score || 0, ad.private_score || 0,
         dupResult.duplicateGroup,
         ad.ad_published_date, ad.ad_status || 'aktivni',
-        now, now, now, ad.raw_data
+        now, now, now, initialStatus, ad.raw_data
       ).run();
 
       return { action: 'new', id: ad.id };

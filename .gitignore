@@ -1,3 +1,10 @@
 node_modules
 .wrangler
 .DS_Store
+.env
+fb-cookies.json
+debug-*.html
+debug-*.png
+tail*.log
+test*.js
+__pycache__/
